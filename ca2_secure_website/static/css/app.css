@@ -26,6 +26,20 @@ body {
   text-decoration: underline;
 }
 
+.nav-logout-button {
+  background: transparent;
+  border: none;
+  color: #e5e7eb;
+  margin-left: 1rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.nav-logout-button:hover {
+  text-decoration: underline;
+}
+
 .mode-badge {
   margin-left: 1rem;
   padding: 0.1rem 0.5rem;
@@ -111,5 +125,38 @@ button:hover {
   margin-top: 1rem;
   font-size: 0.85rem;
   color: #6b7280;
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 960px;
+}
+
+.profile-card {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.75rem 2rem;
+  box-shadow:
+    0 18px 45px rgba(15, 23, 42, 0.25),
+    0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+
+.profile-card h2 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-size: 1.4rem;
+}
+
+.profile-card h3 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 1.1rem;
+}
+
+.profile-card ul {
+  padding-left: 1.1rem;
 }
 
