@@ -82,9 +82,30 @@ def register(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def dashboard(request: HttpRequest) -> HttpResponse:
-    account = _get_primary_account(request.user)
-    transactions = account.transactions.all()[:10]
-    context = {"account": account, "transactions": transactions}
+    accounts = BankAccount.objects.filter(owner=request.user)
+    main = _get_primary_account(request.user)
+    total_balance = sum(a.balance for a in accounts)
+    savings = accounts.filter(name__icontains="Savings").first()
+
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    payees = User.objects.exclude(id=request.user.id).order_by("username")
+
+    savings_goal = Decimal("5000.00")
+    savings_progress = 0
+    if savings:
+        savings_progress = float(min(100, (savings.balance / savings_goal) * 100))
+
+    context = {
+        "accounts": accounts,
+        "main_account": main,
+        "total_balance": total_balance,
+        "savings_account": savings,
+        "savings_goal": savings_goal,
+        "savings_progress": savings_progress,
+        "payees": payees,
+    }
     return render(request, "app/dashboard.html", context)
 
 
