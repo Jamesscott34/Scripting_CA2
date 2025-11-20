@@ -11,6 +11,10 @@ urlpatterns = [
     path("", include("app.urls")),
 ]
 
-# Serve static files in development (and for CA2 demos).
-urlpatterns += static(settings.STATIC_URL, document_root=settings.STATICFILES_DIRS[0])
+# Serve static files for CA2 demos even if DEBUG is false.
+urlpatterns += static(
+    settings.STATIC_URL,
+    document_root=settings.STATICFILES_DIRS[0],
+    insecure=True,
+)
 
