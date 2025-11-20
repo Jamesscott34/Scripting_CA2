@@ -11,9 +11,11 @@ urlpatterns = [
     path("", include("app.urls")),
 ]
 
-# Serve static files for CA2 demos even if DEBUG is false.
+# Serve static files for CA2 demos directly from the `static/` folder,
+# regardless of DEBUG. This avoids needing collectstatic in development.
 urlpatterns += static(
     settings.STATIC_URL,
-    document_root=settings.STATIC_ROOT,
+    document_root=settings.STATICFILES_DIRS[0],
+    insecure=True,
 )
 
