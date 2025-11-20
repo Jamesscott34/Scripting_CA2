@@ -1,1 +1,11 @@
 myvenv/*
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+.env
+.env.*
+/ca2_secure_website/db.sqlite3
+/ca2_secure_website/staticfiles/
+

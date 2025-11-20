@@ -1,0 +1,42 @@
+project:
+  name: "Secure Programming & Scripting CA2"
+  description: >
+    Full-stack security-focused coursework project with a secure Django banking
+    application, standalone security tooling, and DevOps/CI/CD artefacts.
+  student:
+    name: "YOUR_NAME_HERE"
+    id: "YOUR_STUDENT_ID_HERE"
+
+tasks:
+  - id: 1
+    name: "Secure Django Website"
+    path: "ca2_secure_website/"
+    description: >
+      Modern banking-style Django site with authentication, dashboard, profile
+      and search, plus a Secure/Insecure mode toggle implemented in settings
+      and views.
+
+  - id: 2
+    name: "Standalone Security Scripts"
+    path: "task2_scripts/"
+    description: >
+      Python scripts for fuzz testing, SAST (Bandit) and DAST (OWASP ZAP)
+      against the Django application, with sample reports.
+
+  - id: 3
+    name: "DevOps, CI/CD, Docker & Documentation"
+    path: "."
+    description: >
+      Dockerfile, docker-compose, environment templates and documentation to
+      demonstrate secure deployment and automation patterns.
+
+security_modes:
+  env_var: "SECURE_MODE"
+  default: "secure"
+  modes:
+    secure:
+      description: "Hardened configuration with security best practices enabled."
+    insecure:
+      description: "Relaxed configuration intentionally exposing bad practices for teaching."
+
+

@@ -1,0 +1,81 @@
+"""
+Fuzz testing helper script for the CA2 Django banking application.
+
+This script is intentionally generic: it can generate random inputs to hit
+selected HTTP endpoints or pure Python functions. It is designed to be extended
+in later steps of the project.
+"""
+
+import argparse
+import random
+import string
+from typing import List
+
+import requests
+
+
+def random_string(min_len: int = 1, max_len: int = 50) -> str:
+    """Generate a random ASCII string in the given length range."""
+    length = random.randint(min_len, max_len)
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    return "".join(random.choice(alphabet) for _ in range(length))
+
+
+def fuzz_endpoint(base_url: str, path: str, iterations: int) -> None:
+    """
+    Send randomised GET requests to the given endpoint and print basic stats.
+
+    This is deliberately simple and safe; it is *not* a full fuzzing framework
+    but demonstrates the idea of unexpected input testing.
+    """
+    url = base_url.rstrip("/") + "/" + path.lstrip("/")
+    print(f"[+] Fuzzing endpoint: {url} (iterations={iterations})")
+    status_codes: List[int] = []
+
+    for i in range(1, iterations + 1):
+        params = {"q": random_string(0, 80)}
+        try:
+            resp = requests.get(url, params=params, timeout=5)
+            status_codes.append(resp.status_code)
+            if i % 10 == 0:
+                print(f"  - Iteration {i}: status {resp.status_code}")
+        except requests.RequestException as exc:
+            print(f"  ! Request error at iteration {i}: {exc}")
+
+    print("[+] Fuzzing complete. Status code counts:")
+    for code in sorted(set(status_codes)):
+        print(f"    {code}: {status_codes.count(code)}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Simple HTTP fuzz tester for the CA2 Django application."
+    )
+    parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000",
+        help="Base URL of the running Django app (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--path",
+        default="/search/",
+        help="Endpoint path to fuzz (default: /search/).",
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=100,
+        help="Number of fuzzing iterations (default: 100).",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    fuzz_endpoint(args.base_url, args.path, args.iterations)
+
+
+if __name__ == "__main__":
+    main()
+
+

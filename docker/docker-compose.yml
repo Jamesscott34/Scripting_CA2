@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ca2_db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ca2_bank}
+      POSTGRES_USER: ${POSTGRES_USER:-ca2_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - ca2_db_data:/var/lib/postgresql/data
+    networks:
+      - ca2_net
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ca2_web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SECURE_MODE: ${SECURE_MODE:-secure}
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    networks:
+      - ca2_net
+
+networks:
+  ca2_net:
+    driver: bridge
+
+volumes:
+  ca2_db_data:
+    driver: local
+
+
