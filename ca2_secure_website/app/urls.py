@@ -1,10 +1,11 @@
-{
-  "cells": [],
-  "metadata": {
-    "language_info": {
-      "name": "python"
-    }
-  },
-  "nbformat": 4,
-  "nbformat_minor": 2
-}
+"""URL routes for the CA2 banking app."""
+
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path("", views.dashboard, name="dashboard"),
+    path("profile/", views.profile, name="profile"),
+    path("search/", views.search, name="search"),
+]
