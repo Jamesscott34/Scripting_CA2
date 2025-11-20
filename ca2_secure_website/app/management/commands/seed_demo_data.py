@@ -39,7 +39,7 @@ class Command(BaseCommand):
         ]
         password = "UserDemo123!"
 
-        for username, first_name, last_name, email in demo_users:
+        for idx, (username, first_name, last_name, email) in enumerate(demo_users, start=1):
             user, created = User.objects.get_or_create(
                 username=username,
                 defaults={
@@ -58,22 +58,37 @@ class Command(BaseCommand):
             else:
                 self.stdout.write(f"Demo user '{username}' already exists.")
 
-            # Ensure each user has an account and a couple of transactions.
-            account, _ = BankAccount.objects.get_or_create(
+            # Ensure each user has a current and savings account plus transactions.
+            starting_balance = 800 + idx * 150  # vary balances a bit per user
+
+            current, _ = BankAccount.objects.get_or_create(
                 owner=user,
-                defaults={"iban": f"DEMO-{user.id:06d}", "balance": 1000},
+                name="Current Account",
+                defaults={
+                    "iban": f"DEMO-{user.id:06d}",
+                    "balance": starting_balance,
+                },
             )
-            if not account.transactions.exists():
+            if not current.transactions.exists():
                 Transaction.objects.create(
-                    account=account,
-                    amount=250,
+                    account=current,
+                    amount=starting_balance,
                     description="Salary payment",
                 )
                 Transaction.objects.create(
-                    account=account,
+                    account=current,
                     amount=-45,
                     description="Grocery shopping",
                 )
+
+            BankAccount.objects.get_or_create(
+                owner=user,
+                name="Savings Account",
+                defaults={
+                    "iban": f"SAVE-{user.id:06d}",
+                    "balance": 0,
+                },
+            )
 
         self.stdout.write(self.style.SUCCESS("Demo data created successfully."))
 
