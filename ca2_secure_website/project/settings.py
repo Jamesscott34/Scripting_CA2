@@ -120,7 +120,10 @@ LOGOUT_REDIRECT_URL = "login"
 
 SESSION_COOKIE_SECURE = SECURE_MODE == "secure"
 CSRF_COOKIE_SECURE = SECURE_MODE == "secure"
-SECURE_SSL_REDIRECT = SECURE_MODE == "secure"
+# In real production you'd terminate HTTPS in a reverse proxy and keep this on;
+# for the CA2 teaching project we disable automatic HTTPS redirects so the
+# built-in dev server can be used over plain HTTP.
+SECURE_SSL_REDIRECT = False
 SECURE_BROWSER_XSS_FILTER = SECURE_MODE == "secure"
 SECURE_CONTENT_TYPE_NOSNIFF = SECURE_MODE == "secure"
 SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_MODE == "secure"
