@@ -17,12 +17,23 @@ See the individual `README.md` files and `CA2.yaml` for more detailed guidance.
 
 1. Create and activate a virtual environment:
    - `python3 -m venv .venv && source .venv/bin/activate`
-2. Install dependencies:
+2. Install root and Django dependencies:
+   - `pip install -r requirements.txt`
    - `pip install -r ca2_secure_website/requirements.txt`
-3. Apply database migrations and run the Django app:
+3. Initialise the Django database (first time only):
    - `cd ca2_secure_website`
+   - `python manage.py makemigrations app`
    - `python manage.py migrate`
-   - `SECURE_MODE=secure python manage.py runserver`
+   - `python manage.py seed_demo_data`
+4. Run the Django app in **secure mode** using SQLite:
+   - `USE_SQLITE=1 SECURE_MODE=secure python manage.py runserver 127.0.0.1:8001`
+5. To run in **insecure teaching mode** instead:
+   - `USE_SQLITE=1 SECURE_MODE=insecure python manage.py runserver 127.0.0.1:8001`
+
+Default demo logins:
+
+- Superuser/admin dashboard: `admin_james / AdminJames123!`
+- Normal users: `james`, `mark`, `george`, `mary`, `sarah` – all with password `UserDemo123!`
 
 ### Running security tooling (Task 2)
 
