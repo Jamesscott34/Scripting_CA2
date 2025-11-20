@@ -6,13 +6,21 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import authenticate, login
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth import authenticate, get_user_model, login
+from django.contrib.auth.decorators import login_required, user_passes_test
+from django.contrib.auth.views import LoginView
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
+from django.urls import reverse_lazy
 
-from .forms import RegisterForm, SavingsPlanForm, TransferForm
-from .models import BankAccount, Transaction
+from .forms import (
+    AdminUserCreateForm,
+    RegisterForm,
+    SecurityModeForm,
+    SavingsPlanForm,
+    TransferForm,
+)
+from .models import BankAccount, SecurityConfig, Transaction
 
 
 def _ensure_demo_accounts(user):
@@ -53,6 +61,15 @@ def _get_primary_account(user):
 
     main, _ = _ensure_demo_accounts(user)
     return main
+
+
+def _get_current_mode() -> str:
+    """Return the active security mode, falling back to settings."""
+
+    try:
+        return SecurityConfig.get_solo().mode
+    except Exception:
+        return settings.SECURE_MODE
 
 
 def register(request: HttpRequest) -> HttpResponse:
@@ -128,7 +145,7 @@ def profile(request: HttpRequest) -> HttpResponse:
                 description = transfer_form.cleaned_data["description"]
 
                 # Basic security checks in secure mode
-                if settings.SECURE_MODE == "secure" and from_acc.balance < amount:
+                if _get_current_mode() == "secure" and from_acc.balance < amount:
                     messages.error(request, "Insufficient funds for this transfer.")
                 else:
                     from_acc.balance -= amount
@@ -197,7 +214,7 @@ def search(request: HttpRequest) -> HttpResponse:
 
     if query:
         account = _get_primary_account(request.user)
-        if settings.SECURE_MODE == "secure":
+        if _get_current_mode() == "secure":
             results = list(
                 account.transactions.filter(description__icontains=query)[:20]
             )
@@ -230,3 +247,70 @@ def search(request: HttpRequest) -> HttpResponse:
     context = {"query": query, "results": results}
     return render(request, "app/search.html", context)
 
+
+class CustomLoginView(LoginView):
+    """Login view that redirects staff users to the custom admin dashboard."""
+
+    template_name = "registration/login.html"
+
+    def get_success_url(self):
+        url = self.get_redirect_url()
+        if url:
+            return url
+        if self.request.user.is_staff:
+            return reverse_lazy("admin_dashboard")
+        return reverse_lazy("dashboard")
+
+
+@user_passes_test(lambda u: u.is_staff)
+def admin_dashboard(request: HttpRequest) -> HttpResponse:
+    """Simple admin dashboard for CA2: manage users and security mode."""
+
+    User = get_user_model()
+    users = User.objects.all().order_by("username")
+
+    security_config = SecurityConfig.get_solo()
+    mode_form = SecurityModeForm(instance=security_config)
+    user_form = AdminUserCreateForm()
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action == "create_user":
+            user_form = AdminUserCreateForm(request.POST)
+            if user_form.is_valid():
+                user_form.save()
+                messages.success(request, "User created successfully.")
+                return redirect("admin_dashboard")
+
+        elif action == "delete_user":
+            user_id = request.POST.get("user_id")
+            if user_id:
+                try:
+                    target = User.objects.get(pk=user_id)
+                    if target == request.user:
+                        messages.error(request, "You cannot delete your own account.")
+                    else:
+                        target.delete()
+                        messages.success(request, "User deleted.")
+                        return redirect("admin_dashboard")
+                except User.DoesNotExist:
+                    messages.error(request, "User not found.")
+
+        elif action == "toggle_mode":
+            mode_form = SecurityModeForm(request.POST, instance=security_config)
+            if mode_form.is_valid():
+                mode_form.save()
+                messages.success(
+                    request,
+                    f"Security mode updated to {security_config.mode}.",
+                )
+                return redirect("admin_dashboard")
+
+    context = {
+        "users": users,
+        "mode_form": mode_form,
+        "user_form": user_form,
+        "current_mode": _get_current_mode(),
+    }
+    return render(request, "app/admin_dashboard.html", context)

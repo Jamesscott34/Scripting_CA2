@@ -2,15 +2,21 @@
 
 from django.conf import settings
 
+from .models import SecurityConfig
+
 
 def security_mode(request):
     """
     Expose the current security mode to all templates.
 
-    SECURE_MODE comes from Django settings and is driven by the environment
-    variable of the same name (see project.settings and CA2.yaml).
+    By default this is read from SecurityConfig (toggle in admin UI). If that
+    table does not exist yet, fall back to the SECURE_MODE environment / setting.
     """
 
-    return {"SECURE_MODE": settings.SECURE_MODE}
+    try:
+        mode = SecurityConfig.get_solo().mode
+    except Exception:
+        mode = settings.SECURE_MODE
 
+    return {"SECURE_MODE": mode}
 

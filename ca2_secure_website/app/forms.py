@@ -6,7 +6,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import BankAccount
+from .models import BankAccount, SecurityConfig
 
 
 class RegisterForm(UserCreationForm):
@@ -43,9 +43,10 @@ class TransferForm(forms.Form):
 
     def __init__(self, user, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        qs = BankAccount.objects.filter(owner=user)
-        self.fields["from_account"].queryset = qs
-        self.fields["to_account"].queryset = qs
+        mine = BankAccount.objects.filter(owner=user)
+        self.fields["from_account"].queryset = mine
+        # Allow sending to any account in the system (including your own).
+        self.fields["to_account"].queryset = BankAccount.objects.all()
 
     def clean(self):
         cleaned = super().clean()
@@ -93,3 +94,24 @@ class SavingsPlanForm(forms.Form):
                 "Monthly income must be greater than monthly bills to make savings."
             )
         return cleaned
+
+
+class AdminUserCreateForm(UserCreationForm):
+    """Simple form for admins to create new users from the custom admin page."""
+
+    email = forms.EmailField(required=True)
+    first_name = forms.CharField(required=False)
+    last_name = forms.CharField(required=False)
+    is_staff = forms.BooleanField(required=False, initial=False)
+
+    class Meta(UserCreationForm.Meta):
+        model = User
+        fields = ["username", "email", "first_name", "last_name", "is_staff"]
+
+
+class SecurityModeForm(forms.ModelForm):
+    """Form used by admins to toggle secure / insecure mode."""
+
+    class Meta:
+        model = SecurityConfig
+        fields = ["mode"]
