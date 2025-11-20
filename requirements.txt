@@ -1,2 +1,6 @@
 django
 djangorestframework
+bandit
+requests
+python-owasp-zap-v2.4
+
