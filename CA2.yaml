@@ -4,8 +4,8 @@ project:
     Full-stack security-focused coursework project with a secure Django banking
     application, standalone security tooling, and DevOps/CI/CD artefacts.
   student:
-    name: "YOUR_NAME_HERE"
-    id: "YOUR_STUDENT_ID_HERE"
+    name: "James Scott"
+    id: "SBA24070"
 
 tasks:
   - id: 1
