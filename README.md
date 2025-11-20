@@ -1,16 +1,18 @@
 ## Secure Programming & Scripting – CA2 Project
 
-This repository contains the **CA2 Secure Programming & Scripting** project.
-It is organised into three main components:
+This repository contains the **CA2 Secure Programming & Scripting** project:
 
-- **Task 1 – Secure Django Website** (`ca2_secure_website/`)
-- **Task 2 – Security Scripts** (`task2_scripts/`)
-- **Task 3 – DevOps, CI/CD, Docker & Security Documentation** (`docker/`, `CA2.yaml`, `setup.sh`)
+- **Task 1 – Secure Django Website** (`ca2_secure_website/`): modern banking-style
+  Django app with authentication, dashboard, profile, transfers, savings planner
+  and a **Secure / Insecure mode toggle**.
+- **Task 2 – Security Scripts** (`task2_scripts/`): fuzzing, SAST (Bandit) and
+  DAST (OWASP ZAP) tooling aimed at the Django app, producing logs and JSON
+  reports.
+- **Task 3 – DevOps, CI/CD, Docker & Security Documentation** (`docker/`,
+  `.github/workflows/CA2.yaml`, `setup.sh`).
 
-The goal is to showcase a **modern banking-style web application** with a
-**Secure / Insecure mode toggle**, plus supporting security tooling and automation.
-
-See the individual `README.md` files and `CA2.yaml` for more detailed guidance.
+The goal is to showcase a **modern banking-style web application** together with
+supporting security tooling and automation, suitable for CA2 submission.
 
 
 ### Quick start (development)
@@ -35,13 +37,54 @@ Default demo logins:
 - Superuser/admin dashboard: `admin_james / AdminJames123!`
 - Normal users: `james`, `mark`, `george`, `mary`, `sarah` – all with password `UserDemo123!`
 
-### Running security tooling (Task 2)
+### Task 2 – Security tooling (fuzzing, SAST, DAST)
 
-- **Fuzz testing**: `python task2_scripts/fuzz_test.py --base-url http://localhost:8000 --path /search/`
-- **SAST (Bandit)**: `cd task2_scripts && python sast_bandit.py`
-- **DAST (OWASP ZAP)**: start a ZAP daemon, then run `cd task2_scripts && python dast_zap.py`
+From the **project root** (with the app running on `http://127.0.0.1:8001`):
 
-Sample reports can be stored under `task2_scripts/report_samples/`.
+- **Fuzz testing** (with JSON output of all search queries used):
+
+  ```bash
+  python task2_scripts/fuzz_test.py \
+    --base-url http://127.0.0.1:8001 \
+    --path /search/ \
+    --iterations 50 \
+    --output-json task2_scripts/report_samples/fuzz_results_manual.json
+  ```
+
+- **SAST (Bandit)** – writes JSON reports to `task2_scripts/bandit_report_*.json`:
+
+  ```bash
+  cd task2_scripts
+  python sast_bandit.py --path ../ca2_secure_website --output-json bandit_report_manual.json
+  cd ..
+  ```
+
+- **DAST (OWASP ZAP)** – requires a ZAP daemon on `localhost:8080`:
+
+  ```bash
+  cd task2_scripts
+  python dast_zap.py --target http://127.0.0.1:8001 --zap-host localhost --zap-port 8080
+  cd ..
+  ```
+
+Sample / trimmed reports can be stored under `task2_scripts/report_samples/` for
+inclusion in your CA2 submission.
+
+### Running tests (Task 1 + Task 2 integration)
+
+From `ca2_secure_website`:
+
+- Run all tests (both modes, creates/destroys a fresh test DB automatically):  
+  `python manage.py test`
+- Run only secure-mode Task 2 integrations (fuzz + Bandit):  
+  `TEST_MODE=secure python manage.py test`
+- Run only insecure-mode Task 2 integrations:  
+  `TEST_MODE=insecure python manage.py test`
+
+Logs and reports:
+
+- Text logs: `logs/fuzz_secure.log`, `logs/fuzz_insecure.log`, `logs/bandit_secure.log`, `logs/bandit_insecure.log`
+- JSON fuzz results: `task2_scripts/report_samples/fuzz_results_secure.json`, `fuzz_results_insecure.json`
 
 ### Docker (Task 3)
 
@@ -53,4 +96,8 @@ To run the Django app and Postgres via Docker:
    - `cp .env.example .env` (then edit secrets)
    - `docker compose up --build`
 
+The GitHub Actions workflow (`.github/workflows/CA2.yaml`) runs all of the
+above automatically on each push: it installs dependencies, runs tests in both
+secure and insecure modes, runs Bandit, builds the Docker image, and then runs
+tests again against the Dockerised application.
 

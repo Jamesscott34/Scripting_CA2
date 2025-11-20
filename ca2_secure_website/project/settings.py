@@ -47,6 +47,11 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+if SECURE_MODE == "insecure":
+    # In insecure teaching mode we remove CSRF protection completely so that
+    # CSRF attacks are easy to demonstrate.
+    MIDDLEWARE.remove("django.middleware.csrf.CsrfViewMiddleware")
+
 ROOT_URLCONF = "project.urls"
 
 TEMPLATES = [

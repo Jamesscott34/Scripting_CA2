@@ -7,9 +7,12 @@ in later steps of the project.
 """
 
 import argparse
+import json
+import os
 import random
 import string
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 import requests
 
@@ -21,7 +24,9 @@ def random_string(min_len: int = 1, max_len: int = 50) -> str:
     return "".join(random.choice(alphabet) for _ in range(length))
 
 
-def fuzz_endpoint(base_url: str, path: str, iterations: int) -> None:
+def fuzz_endpoint(
+    base_url: str, path: str, iterations: int, output_json: Optional[Path] = None
+) -> None:
     """
     Send randomised GET requests to the given endpoint and print basic stats.
 
@@ -31,12 +36,20 @@ def fuzz_endpoint(base_url: str, path: str, iterations: int) -> None:
     url = base_url.rstrip("/") + "/" + path.lstrip("/")
     print(f"[+] Fuzzing endpoint: {url} (iterations={iterations})")
     status_codes: List[int] = []
+    samples = []
 
     for i in range(1, iterations + 1):
         params = {"q": random_string(0, 80)}
         try:
             resp = requests.get(url, params=params, timeout=5)
             status_codes.append(resp.status_code)
+            samples.append(
+                {
+                    "iteration": i,
+                    "params": params,
+                    "status_code": resp.status_code,
+                }
+            )
             if i % 10 == 0:
                 print(f"  - Iteration {i}: status {resp.status_code}")
         except requests.RequestException as exc:
@@ -45,6 +58,18 @@ def fuzz_endpoint(base_url: str, path: str, iterations: int) -> None:
     print("[+] Fuzzing complete. Status code counts:")
     for code in sorted(set(status_codes)):
         print(f"    {code}: {status_codes.count(code)}")
+
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "mode": os.getenv("SECURE_MODE", "unknown"),
+            "base_url": base_url,
+            "path": path,
+            "iterations": iterations,
+            "samples": samples,
+        }
+        output_json.write_text(json.dumps(data, indent=2))
+        print(f"[+] JSON fuzz report written to {output_json}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,12 +92,18 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Number of fuzzing iterations (default: 100).",
     )
+    parser.add_argument(
+        "--output-json",
+        default=None,
+        help="Optional path to write a JSON report of fuzzed queries and status codes.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    fuzz_endpoint(args.base_url, args.path, args.iterations)
+    output_json = Path(args.output_json) if args.output_json else None
+    fuzz_endpoint(args.base_url, args.path, args.iterations, output_json)
 
 
 if __name__ == "__main__":

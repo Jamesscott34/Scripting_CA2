@@ -8,4 +8,5 @@ __pycache__/
 .env.*
 /ca2_secure_website/db.sqlite3
 /ca2_secure_website/staticfiles/
+logs/*
 

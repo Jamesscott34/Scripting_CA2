@@ -166,7 +166,17 @@ class Task2ScriptsLogTests(TestCase):
     def test_task2_scripts_generate_logs_for_secure_and_insecure(self) -> None:
         root = self._project_root()
 
-        for mode in ("secure", "insecure"):
+        # Allow limiting to a single mode via TEST_MODE env var, so you can run:
+        #   TEST_MODE=secure python manage.py test
+        # or:
+        #   TEST_MODE=insecure python manage.py test
+        selected_mode = os.getenv("TEST_MODE")
+        modes = (selected_mode,) if selected_mode in {"secure", "insecure"} else (
+            "secure",
+            "insecure",
+        )
+
+        for mode in modes:
             # Fuzzing against the running app (ensure you've started it separately).
             fuzz_cmd = [
                 sys.executable,
@@ -177,6 +187,13 @@ class Task2ScriptsLogTests(TestCase):
                 "/search/",
                 "--iterations",
                 "5",
+                "--output-json",
+                str(
+                    root
+                    / "task2_scripts"
+                    / "report_samples"
+                    / f"fuzz_results_{mode}.json"
+                ),
             ]
             self._run_script(fuzz_cmd, f"fuzz_{mode}.log", mode)
 

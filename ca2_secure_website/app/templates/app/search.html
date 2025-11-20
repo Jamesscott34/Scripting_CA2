@@ -8,7 +8,16 @@
   </form>
 
   {% if query %}
-    <p>Showing results for: <strong>{{ query }}</strong></p>
+    <p>
+      Showing results for:
+      <strong>
+        {% if SECURE_MODE == "secure" %}
+          {{ query }}
+        {% else %}
+          {{ query|safe }}
+        {% endif %}
+      </strong>
+    </p>
     {% if results %}
       <table>
         <thead>

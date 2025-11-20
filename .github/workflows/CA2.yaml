@@ -28,24 +28,46 @@ jobs:
         run: |
           pip install -r ca2_secure_website/requirements.txt
           pip install bandit
-
-      - name: Run Django tests (secure mode)
+      - name: Run Django tests (secure mode, SQLite)
         working-directory: ca2_secure_website
         env:
           SECURE_MODE: secure
+          USE_SQLITE: 1
         run: |
+          python manage.py makemigrations app
           python manage.py migrate
-          python manage.py test
+          TEST_MODE=secure python manage.py test
+
+      - name: Run Django tests (insecure mode, SQLite)
+        working-directory: ca2_secure_website
+        env:
+          SECURE_MODE: insecure
+          USE_SQLITE: 1
+        run: |
+          TEST_MODE=insecure python manage.py test
 
       - name: Run Bandit SAST
         run: |
           bandit -r ca2_secure_website -q
 
-      - name: Build Docker image (step after requirements)
+      - name: Build and start Docker Compose
         working-directory: docker
         run: |
           docker --version
           docker compose version
-          docker compose build
+          docker compose up -d --build
 
+      - name: Run Django tests inside Docker (secure and insecure)
+        working-directory: docker
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          docker compose run --rm -e SECURE_MODE=secure web python manage.py test
+          docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
+
+      - name: Stop Docker Compose and clean volumes
+        if: always()
+        working-directory: docker
+        run: |
+          docker compose down -v
 
