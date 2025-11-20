@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Search transactions</h1>
+  <form method="get">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search..." />
+    <button type="submit">Search</button>
+  </form>
+
+  {% if query %}
+    <p>Showing results for: <strong>{{ query }}</strong></p>
+    <p>(In a later step this will query transactions safely.)</p>
+  {% endif %}
+{% endblock %}
+
+
