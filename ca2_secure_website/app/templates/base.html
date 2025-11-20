@@ -8,7 +8,17 @@
   </head>
   <body>
     <header class="navbar">
-      <div class="brand">CA2 Secure Bank</div>
+      <div class="brand">
+        CA2 Secure Bank
+        <span class="mode-badge">
+          Mode:
+          {% if SECURE_MODE == "secure" %}
+            Secure
+          {% else %}
+            Insecure (teaching mode)
+          {% endif %}
+        </span>
+      </div>
       <nav>
         <a href="{% url 'dashboard' %}">Dashboard</a>
         <a href="{% url 'profile' %}">Profile</a>

@@ -8,4 +8,5 @@ urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("profile/", views.profile, name="profile"),
     path("search/", views.search, name="search"),
+    path("register/", views.register, name="register"),
 ]
