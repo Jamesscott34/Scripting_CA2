@@ -7,15 +7,15 @@ from app.models import BankAccount, Transaction
 
 
 class Command(BaseCommand):
-    help = "Create a superuser and demo users with bank accounts/transactions."
+    help = "Create a superuser and named demo users with bank accounts/transactions."
 
     def handle(self, *args, **options):
         User = get_user_model()
 
         # Superuser
-        admin_username = "admin"
-        admin_password = "AdminDemo123!"
-        admin_email = "admin@example.com"
+        admin_username = "admin_james"
+        admin_password = "AdminJames123!"
+        admin_email = "admin.james@example.com"
 
         if not User.objects.filter(username=admin_username).exists():
             self.stdout.write(f"Creating superuser '{admin_username}'...")
@@ -23,24 +23,38 @@ class Command(BaseCommand):
                 username=admin_username,
                 email=admin_email,
                 password=admin_password,
+                first_name="James",
+                last_name="Admin",
             )
         else:
             self.stdout.write(f"Superuser '{admin_username}' already exists.")
 
-        # Demo users
-        for i in range(1, 6):
-            username = f"user{i}"
-            email = f"user{i}@example.com"
-            password = "UserDemo123!"
+        # Named demo users
+        demo_users = [
+            ("james", "James", "Smith", "james@example.com"),
+            ("mark", "Mark", "Brown", "mark@example.com"),
+            ("george", "George", "Johnson", "george@example.com"),
+            ("mary", "Mary", "O'Neil", "mary@example.com"),
+            ("sarah", "Sarah", "Lee", "sarah@example.com"),
+        ]
+        password = "UserDemo123!"
 
+        for username, first_name, last_name, email in demo_users:
             user, created = User.objects.get_or_create(
                 username=username,
-                defaults={"email": email},
+                defaults={
+                    "email": email,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                },
             )
             if created:
                 user.set_password(password)
                 user.save()
-                self.stdout.write(f"Created demo user '{username}' with password '{password}'.")
+                self.stdout.write(
+                    f"Created demo user '{username}' "
+                    f"({first_name} {last_name}) with password '{password}'."
+                )
             else:
                 self.stdout.write(f"Demo user '{username}' already exists.")
 
@@ -62,5 +76,6 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write(self.style.SUCCESS("Demo data created successfully."))
+
 
 
