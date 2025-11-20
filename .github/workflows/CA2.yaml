@@ -1,0 +1,51 @@
+name: CA2
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install root requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Django app requirements
+        run: |
+          pip install -r ca2_secure_website/requirements.txt
+          pip install bandit
+
+      - name: Run Django tests (secure mode)
+        working-directory: ca2_secure_website
+        env:
+          SECURE_MODE: secure
+        run: |
+          python manage.py migrate
+          python manage.py test
+
+      - name: Run Bandit SAST
+        run: |
+          bandit -r ca2_secure_website -q
+
+      - name: Build Docker image (step after requirements)
+        working-directory: docker
+        run: |
+          docker --version
+          docker compose version
+          docker compose build
+
+
