@@ -18,6 +18,9 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() in {"1", "true", "yes"}
 
 SECURE_MODE = os.getenv("SECURE_MODE", "secure").lower()
 
+# Optional override to use SQLite for local development instead of PostgreSQL.
+USE_SQLITE = os.getenv("USE_SQLITE", "0").lower() in {"1", "true", "yes"}
+
 ALLOWED_HOSTS: list[str] = [
     h.strip()
     for h in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
@@ -66,16 +69,24 @@ TEMPLATES = [
 WSGI_APPLICATION = "project.wsgi.application"
 ASGI_APPLICATION = "project.asgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("POSTGRES_DB", "ca2_bank"),
-        "USER": os.getenv("POSTGRES_USER", "ca2_user"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "changeme"),
-        "HOST": os.getenv("POSTGRES_HOST", "localhost"),
-        "PORT": os.getenv("POSTGRES_PORT", "5432"),
+if USE_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("POSTGRES_DB", "ca2_bank"),
+            "USER": os.getenv("POSTGRES_USER", "ca2_user"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "changeme"),
+            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
+            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {
