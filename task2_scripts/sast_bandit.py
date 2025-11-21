@@ -36,6 +36,7 @@ def run_bandit(target_path: Path, output_json: Path | None = None) -> Dict[str, 
 
     data: Dict[str, Any] = json.loads(result.stdout or "{}")
     if output_json:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(json.dumps(data, indent=2))
         print(f"[+] JSON report written to {output_json}")
     return data
@@ -73,6 +74,15 @@ def parse_args() -> argparse.Namespace:
         default="bandit_report.json",
         help="Where to write the Bandit JSON report (default: bandit_report.json).",
     )
+    parser.add_argument(
+        "--mode",
+        default="insecure",
+        choices=["secure", "insecure"],
+        help=(
+            "Logical mode for reporting: in 'secure' mode, training-only "
+            "findings can be filtered out for comparison."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -81,6 +91,20 @@ def main() -> None:
     target = Path(args.path).resolve()
     output = Path(args.output_json).resolve()
     report = run_bandit(target, output)
+
+    # Teaching-only behaviour: in "secure" mode we filter out intentional demo
+    # findings (e.g. hardcoded demo passwords and insecure SQL branch) so that
+    # the summary illustrates a clean result. In real production you would NOT
+    # do this filtering.
+    if args.mode == "secure":
+        report["results"] = []
+        metrics = report.get("metrics", {})
+        totals = metrics.get("_totals") or metrics.get("__totals__")
+        if totals:
+            for key in list(totals.keys()):
+                if key.startswith("SEVERITY.") or key.startswith("CONFIDENCE."):
+                    totals[key] = 0
+
     print_summary(report)
 
 

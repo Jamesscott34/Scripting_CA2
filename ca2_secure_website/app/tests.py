@@ -166,11 +166,11 @@ class Task2ScriptsLogTests(TestCase):
     def test_task2_scripts_generate_logs_for_secure_and_insecure(self) -> None:
         root = self._project_root()
 
-        # Allow limiting to a single mode via TEST_MODE env var, so you can run:
-        #   TEST_MODE=secure python manage.py test
-        # or:
-        #   TEST_MODE=insecure python manage.py test
-        selected_mode = os.getenv("TEST_MODE")
+        # Allow limiting to a single mode via environment:
+        # - Primary: SECURE_MODE (so running `SECURE_MODE=secure python manage.py test`
+        #   only runs secure-mode Task 2 integrations).
+        # - Override: TEST_MODE (explicit test selector).
+        selected_mode = os.getenv("TEST_MODE") or os.getenv("SECURE_MODE")
         modes = (selected_mode,) if selected_mode in {"secure", "insecure"} else (
             "secure",
             "insecure",
@@ -190,8 +190,8 @@ class Task2ScriptsLogTests(TestCase):
                 "--output-json",
                 str(
                     root
-                    / "task2_scripts"
-                    / "report_samples"
+                    / "logs"
+                    / "json_logs"
                     / f"fuzz_results_{mode}.json"
                 ),
             ]
@@ -204,7 +204,14 @@ class Task2ScriptsLogTests(TestCase):
                 "--path",
                 str(root / "ca2_secure_website"),
                 "--output-json",
-                str(root / "task2_scripts" / f"bandit_report_{mode}.json"),
+                str(
+                    root
+                    / "logs"
+                    / "json_logs"
+                    / f"bandit_report_{mode}.json"
+                ),
+                "--mode",
+                mode,
             ]
             self._run_script(bandit_cmd, f"bandit_{mode}.log", mode)
 

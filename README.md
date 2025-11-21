@@ -84,7 +84,9 @@ From `ca2_secure_website`:
 Logs and reports:
 
 - Text logs: `logs/fuzz_secure.log`, `logs/fuzz_insecure.log`, `logs/bandit_secure.log`, `logs/bandit_insecure.log`
-- JSON fuzz results: `task2_scripts/report_samples/fuzz_results_secure.json`, `fuzz_results_insecure.json`
+- JSON logs (created by tests and scripts): under `logs/json_logs/`, e.g.:
+  - `logs/json_logs/fuzz_results_secure.json`, `fuzz_results_insecure.json`
+  - `logs/json_logs/bandit_report_secure.json`, `bandit_report_insecure.json`
 
 ### Docker (Task 3)
 

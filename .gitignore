@@ -9,4 +9,6 @@ __pycache__/
 /ca2_secure_website/db.sqlite3
 /ca2_secure_website/staticfiles/
 logs/*
+CA2_Project_Overview.md
+task2_scripts/report_samples/*
 
