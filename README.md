@@ -178,13 +178,69 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
   cd ..
   ```
 
-- **DAST (OWASP ZAP)** – requires a ZAP daemon on `localhost:8080`:
+- **DAST (OWASP ZAP)** – via `dast_zap.py`, with Docker automation and auth support:
 
-  ```bash
-  cd task2_scripts
-  python dast_zap.py --target http://127.0.0.1:8001 --zap-host localhost --zap-port 8080
-  cd ..
-  ```
+  - **Basic scan using an existing ZAP daemon**:
+
+    ```bash
+    python task2_scripts/dast_zap.py \
+      --target http://127.0.0.1:8001 \
+      --zap-host localhost \
+      --zap-port 8080 \
+      --output-prefix logs/zap_reports/zap_ca2 \
+      --formats json,html,xml,md
+    ```
+
+    This will:
+    - Pre-check the target with a HEAD request.
+    - Use the classic spider + active scan.
+    - Generate JSON, HTML, XML and Markdown reports under `logs/zap_reports/`.
+
+  - **Automatic ZAP Docker start/stop**:
+
+    ```bash
+    python task2_scripts/dast_zap.py \
+      --target http://127.0.0.1:8001 \
+      --auto-docker \
+      --docker-image owasp/zap2docker-stable \
+      --docker-container zap-ca2 \
+      --output-prefix logs/zap_reports/zap_ca2_auto \
+      --formats json,html,xml
+    ```
+
+  - **Authenticated scan with include/exclude rules**:
+
+    ```bash
+    python task2_scripts/dast_zap.py \
+      --target http://127.0.0.1:8001 \
+      --auto-docker \
+      --login-url /accounts/login/ \
+      --login-username james \
+      --login-password UserDemo123! \
+      --include "http://127.0.0.1:8001/.*" \
+      --exclude "/static/.*" "/admin/.*" "/media/.*" "/docs/.*" \
+      --output-prefix logs/zap_reports/zap_ca2_auth \
+      --formats json,html,xml,md
+    ```
+
+    This configures a ZAP context, performs a form-based login, and then runs
+    spider + active scan **as the authenticated user**, while skipping noisy or
+    irrelevant paths such as `/static/` and `/admin/`.
+
+  - **CI/CD-style severity gates**:
+
+    ```bash
+    python task2_scripts/dast_zap.py \
+      --target http://127.0.0.1:8001 \
+      --auto-docker \
+      --output-prefix logs/zap_reports/zap_ci \
+      --formats json \
+      --fail-on-medium
+    ```
+
+    `--fail-on-high` and `--fail-on-medium` cause the script to exit with a
+    non-zero code if High (or Medium/High) alerts are present, making it easy
+    to plug into GitHub Actions or other CI pipelines.
 
 All JSON reports and fuzz outputs are written under `logs/json_logs/` and can be
 referenced directly in your CA2 submission.
