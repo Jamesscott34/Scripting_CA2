@@ -198,9 +198,20 @@ def main() -> None:
             base_name = target.name
 
         json_dir = Path("logs") / "json_logs"
-        output = json_dir / f"{base_name}_bandit_{date_str}.json"
-        log_path = Path("logs") / f"{base_name}_bandit_{date_str}.log"
-        excel_path = Path("logs") / "excel" / f"{base_name}_bandit_{date_str}.xlsx"
+        base_stem = f"{base_name}_bandit_{date_str}"
+
+        # Find a free suffix (", (1)", (2), ...) based on the JSON path so that
+        # multiple runs on the same day do not overwrite each other.
+        suffix = ""
+        output = json_dir / f"{base_stem}.json"
+        counter = 1
+        while output.exists():
+            suffix = f"({counter})"
+            output = json_dir / f"{base_stem}{suffix}.json"
+            counter += 1
+
+        log_path = Path("logs") / f"{base_stem}{suffix}.log"
+        excel_path = Path("logs") / "excel" / f"{base_stem}{suffix}.xlsx"
 
     report = run_bandit(target, output, log_path=log_path, excel_path=excel_path)
 
