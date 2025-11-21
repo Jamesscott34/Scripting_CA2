@@ -283,6 +283,7 @@ def parse_args() -> argparse.Namespace:
         description="Run an OWASP ZAP DAST scan against the CA2 Django app or another target."
     )
     parser.add_argument(
+        "-t",
         "--target",
         default="http://localhost:8000",
         help="Target URL to scan (default: http://localhost:8000).",
@@ -399,6 +400,15 @@ def parse_args() -> argparse.Namespace:
             "Exit with non-zero status if any Medium or High risk alerts are found."
         ),
     )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help=(
+            "Run a full automatic scan with sensible defaults suitable for "
+            "CA2 demonstrations (auto-Docker, reports under logs/zap_reports, "
+            "HTML/JSON/MD outputs, and standard excludes for static/admin paths)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -407,6 +417,17 @@ def main() -> None:
     output_json = Path(args.output_json) if args.output_json else None
     formats = [f.strip().lower() for f in args.formats.split(",") if f.strip()]
     output_base = Path(args.output_prefix) if args.output_prefix else None
+
+    # Auto mode: turn on Docker, set a sensible output prefix under logs/zap_reports
+    # and default to multiple formats.
+    if args.auto:
+        args.auto_docker = True
+        if output_base is None:
+            # Derive a simple base name from the target host.
+            safe_target = args.target.replace("://", "_").replace("/", "_")
+            output_base = Path("logs") / "zap_reports" / f"zap_auto_{safe_target}"
+        if not formats:
+            formats = ["json", "html", "md"]
 
     # Quick availability check for the target before we start ZAP work.
     if not check_target_available(args.target, insecure=args.insecure):
