@@ -96,16 +96,27 @@ jobs:
         with:
           sarif_file: bandit.sarif
 
-      # 10) Build and start the Docker Compose stack (web + db).
-      #    This ensures the Dockerised app can be built and run successfully.
-      - name: Build and start Docker Compose
+      # 10) Build and start the Docker Compose stack (web + db) in SECURE mode.
+      #     This ensures the Dockerised app can be built and run successfully.
+      - name: Build and start Docker Compose (secure image)
         working-directory: docker
+        env:
+          SECURE_MODE: secure
         run: |
           docker --version
           docker compose version
           docker compose up -d --build
 
-      # 11) Scan the built Docker image with Trivy for container vulnerabilities.
+      # 11) Build an additional INSECURE image variant using the SECURE_MODE build arg.
+      - name: Build insecure Docker image variant
+        run: |
+          docker build \
+            -f docker/Dockerfile \
+            --build-arg SECURE_MODE=insecure \
+            -t ca2_web:insecure \
+            .
+
+      # 12) Scan the secure Docker image with Trivy for container vulnerabilities.
       - name: Scan Docker Image with Trivy
         uses: aquasecurity/trivy-action@master
         with:
@@ -113,13 +124,13 @@ jobs:
           format: "table"
           exit-code: "1"
 
-      # 12) Tag Docker image with commit SHA to support rollbacks.
+      # 13) Tag Docker image with commit SHA to support rollbacks.
       - name: Tag Docker image
         working-directory: docker
         run: |
           docker tag ca2_web:latest ca2_web:${{ github.sha }}
 
-      # 13) Run Django tests *inside* the Docker web container in both modes.
+      # 14) Run Django tests *inside* the Docker web container in both modes.
       #    SECURE_MODE environment variable is passed through to run tests
       #    first in secure, then in insecure mode.
       - name: Run Django tests inside Docker (secure and insecure)
@@ -130,7 +141,7 @@ jobs:
           docker compose run --rm -e SECURE_MODE=secure web python manage.py test
           docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
 
-      # 14) Run an OWASP ZAP DAST scan against the Dockerised app.
+      # 15) Run an OWASP ZAP DAST scan against the Dockerised app.
       - name: Run ZAP DAST scan
         run: |
           python task2_scripts/dast_zap.py \
@@ -138,7 +149,7 @@ jobs:
             --auto \
             --fail-on-medium
 
-      # 15) Upload logs and security reports as CI artefacts for CA2 evidence.
+      # 16) Upload logs and security reports as CI artefacts for CA2 evidence.
       - name: Upload logs and reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -150,7 +161,7 @@ jobs:
             logs/excel
             logs/zap_reports
 
-      # 16) Always stop containers and remove volumes to keep CI clean.
+      # 17) Always stop containers and remove volumes to keep CI clean.
       - name: Stop Docker Compose and clean volumes
         if: always()
         working-directory: docker
