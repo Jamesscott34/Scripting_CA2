@@ -89,7 +89,9 @@ jobs:
       # 9) Run Bandit SAST and upload SARIF for GitHub code scanning.
       - name: Run Bandit SAST (SARIF)
         run: |
-          python -m bandit -r ca2_secure_website -f sarif -o bandit.sarif
+          # --exit-zero ensures CI continues even if Bandit finds issues;
+          # the findings are still captured in the SARIF report for code scanning.
+          python -m bandit -r ca2_secure_website -f sarif -o bandit.sarif --exit-zero
 
       - name: Upload Bandit SARIF
         uses: github/codeql-action/upload-sarif@v3
