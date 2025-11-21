@@ -11,7 +11,7 @@ This repository contains the **CA2 Secure Programming & Scripting** project:
 - **Task 3 – DevOps, CI/CD, Docker & Security Documentation** (`docker/`,
   `.github/workflows/CA2.yaml`, `setup.sh`).
 
-The goal is to showcase a **modern banking-style web application** together with
+The goal is to showcase a **web application** together with
 supporting security tooling and automation, suitable for CA2 submission.
 
 
