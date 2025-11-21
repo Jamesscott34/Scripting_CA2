@@ -1,4 +1,15 @@
-"""Tests for the CA2 banking app and security tooling."""
+"""Tests for the CA2 banking app and security tooling.
+
+This module contains:
+
+- Functional tests for the Django views (dashboard, search in secure/insecure modes).
+- "Buffering" / robustness checks using very large input.
+- Integration tests that invoke the Task 2 scripts (fuzzing and Bandit),
+  log their output, and store JSON artefacts for later inspection.
+
+Each class and test is documented to explain *what* is being verified and
+*why* it matters for secure vs insecure behaviour.
+"""
 
 import os
 import subprocess
@@ -14,16 +25,20 @@ from .models import BankAccount, SecurityConfig, Transaction
 
 
 class DashboardViewTests(TestCase):
+    """Basic smoke tests for the dashboard view."""
+
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="testuser", password="password123")
         self.client = Client()
 
     def test_dashboard_requires_login(self) -> None:
+        """Unauthenticated users should be redirected to the login page."""
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 302)
         self.assertIn("login", response.url)
 
     def test_dashboard_renders_for_authenticated_user(self) -> None:
+        """Authenticated users should see the dashboard template."""
         self.client.login(username="testuser", password="password123")
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
@@ -31,8 +46,17 @@ class DashboardViewTests(TestCase):
 
 
 class SearchViewSecureModeTests(TestCase):
+    """
+    Tests for the search view when running in SECURE mode.
+
+    These verify that:
+    - The ORM-based search path is used and returns expected results.
+    - Potential XSS payloads are escaped.
+    - Very large input does not break the view.
+    """
     @override_settings(SECURE_MODE="secure")
     def test_secure_search_uses_orm_and_returns_results(self) -> None:
+        """Secure search should find results using the safe ORM path."""
         user = User.objects.create_user(username="alice", password="password123")
         account = BankAccount.objects.create(owner=user, iban="TESTIBAN1", balance=100)
         Transaction.objects.create(account=account, amount=10, description="Coffee shop")
@@ -46,6 +70,10 @@ class SearchViewSecureModeTests(TestCase):
 
     @override_settings(SECURE_MODE="secure")
     def test_secure_search_escapes_script_tags(self) -> None:
+        """
+        Ensure that script tags in the query are HTML-escaped and not rendered
+        as raw `<script>` elements, preventing reflected XSS in secure mode.
+        """
         user = User.objects.create_user(username="alice2", password="password123")
         account = BankAccount.objects.create(owner=user, iban="TESTIBAN3", balance=100)
         Transaction.objects.create(account=account, amount=10, description="Test")
@@ -62,6 +90,10 @@ class SearchViewSecureModeTests(TestCase):
 
     @override_settings(SECURE_MODE="secure")
     def test_secure_search_handles_large_input(self) -> None:
+        """
+        Send a very large query string and assert the view still returns HTTP
+        200, exercising buffering and robustness without crashing.
+        """
         user = User.objects.create_user(username="alice3", password="password123")
         account = BankAccount.objects.create(owner=user, iban="TESTIBAN4", balance=100)
         Transaction.objects.create(account=account, amount=10, description="Test")
@@ -74,8 +106,17 @@ class SearchViewSecureModeTests(TestCase):
 
 
 class SearchViewInsecureModeTests(TestCase):
+    """
+    Tests for the search view when running in INSECURE mode.
+
+    Here we *intentionally* verify that:
+    - The page still works functionally.
+    - Script tags are reflected unescaped, demonstrating XSS.
+    - Large input is accepted (for fuzzing / training purposes).
+    """
     @override_settings(SECURE_MODE="insecure")
     def test_insecure_search_still_returns_expected_results(self) -> None:
+        """Insecure search should still behave functionally for normal queries."""
         user = User.objects.create_user(username="bob", password="password123")
         account = BankAccount.objects.create(owner=user, iban="TESTIBAN2", balance=50)
         Transaction.objects.create(account=account, amount=5, description="Taxi fare")
@@ -110,6 +151,7 @@ class SearchViewInsecureModeTests(TestCase):
 
     @override_settings(SECURE_MODE="insecure")
     def test_insecure_search_handles_large_input(self) -> None:
+        """In insecure mode, large inputs should also be accepted without crashing."""
         user = User.objects.create_user(username="bob3", password="password123")
         account = BankAccount.objects.create(owner=user, iban="TESTIBAN6", balance=50)
         Transaction.objects.create(account=account, amount=5, description="Test")
@@ -131,15 +173,29 @@ class Task2ScriptsLogTests(TestCase):
     """
 
     def _project_root(self) -> Path:
-        # tests.py lives in ca2_secure_website/app/, so the repo root is two levels up.
+        """Return the repository root directory.
+
+        `tests.py` lives in `ca2_secure_website/app/`, so the project root is
+        two levels up from this file.
+        """
         return Path(__file__).resolve().parents[2]
 
     def _logs_dir(self) -> Path:
+        """Ensure and return the folder used for human-readable log files."""
+
         logs = self._project_root() / "logs"
         logs.mkdir(exist_ok=True)
         return logs
 
     def _run_script(self, cmd: list[str], log_name: str, mode: str) -> None:
+        """Run a Task 2 script and capture its output into a log file.
+
+        The log contains:
+        - Timestamp
+        - Mode (secure/insecure)
+        - Command and return code
+        - Full STDOUT and STDERR
+        """
         root = self._project_root()
         env = os.environ.copy()
         env["SECURE_MODE"] = mode
@@ -164,6 +220,16 @@ class Task2ScriptsLogTests(TestCase):
         )
 
     def test_task2_scripts_generate_logs_for_secure_and_insecure(self) -> None:
+        """
+        Run fuzzing and Bandit scripts in secure and insecure modes and ensure
+        that logs and JSON artefacts are generated.
+
+        Modes:
+        - If `SECURE_MODE` is set (e.g. `SECURE_MODE=secure python manage.py test`)
+          we only run that mode.
+        - Otherwise, we run both secure and insecure to generate comparative data.
+        """
+
         root = self._project_root()
 
         # Allow limiting to a single mode via environment:
