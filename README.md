@@ -205,7 +205,7 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
       --docker-image owasp/zap2docker-stable \
       --docker-container zap-ca2 \
       --output-prefix logs/zap_reports/zap_ca2_auto \
-      --formats json,html,xml
+      --formats json,html,xml,xlsx
     ```
 
   - **Authenticated scan with include/exclude rules**:
@@ -231,16 +231,15 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
 
     ```bash
     python task2_scripts/dast_zap.py \
-      --target http://127.0.0.1:8001 \
-      --auto-docker \
-      --output-prefix logs/zap_reports/zap_ci \
-      --formats json \
+      -t http://127.0.0.1:8001 \
+      --auto \
       --fail-on-medium
     ```
 
     `--fail-on-high` and `--fail-on-medium` cause the script to exit with a
     non-zero code if High (or Medium/High) alerts are present, making it easy
-    to plug into GitHub Actions or other CI pipelines.
+    to plug into GitHub Actions or other CI pipelines. In `--auto` mode
+    reports are named like `logs/zap_reports/zap_<host>_<ddmmyy>.json|html|md|xlsx`.
 
 All JSON reports and fuzz outputs are written under `logs/json_logs/` and can be
 referenced directly in your CA2 submission.

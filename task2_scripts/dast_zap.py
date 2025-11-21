@@ -15,8 +15,10 @@ import argparse
 import json
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 from zapv2 import ZAPv2
@@ -275,6 +277,54 @@ def run_dast(
             md_path.write_text("\n".join(md_lines))
             print(f"[+] Markdown summary written to {md_path}")
 
+        if "xlsx" in formats:
+            try:
+                from openpyxl import Workbook  # type: ignore
+
+                excel_path = base.with_suffix(".xlsx")
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "alerts"
+                ws.append(
+                    ["risk", "alert", "url", "param", "evidence"]
+                )
+                for alert in alerts:
+                    ws.append(
+                        [
+                            alert.get("risk"),
+                            alert.get("alert"),
+                            alert.get("url"),
+                            alert.get("param"),
+                            alert.get("evidence"),
+                        ]
+                    )
+                wb.save(excel_path)
+                print(f"[+] Excel report written to {excel_path}")
+            except ImportError:
+                print(
+                    "[!] openpyxl is not installed; skipping Excel export for ZAP. "
+                    "Install it with 'pip install openpyxl' to enable Excel output."
+                )
+
+        # Always emit a simple text log alongside other formats.
+        log_path = base.with_suffix(".log")
+        log_lines: List[str] = [
+            f"ZAP DAST summary for {target}",
+            f"Generated at: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+            "",
+            "Severity counts:",
+        ]
+        for sev, count in severities.items():
+            log_lines.append(f"  {sev}: {count}")
+        log_lines.append("")
+        log_lines.append("Alerts:")
+        for alert in alerts:
+            log_lines.append(
+                f"- [{alert.get('risk')}] {alert.get('alert')} on {alert.get('url')}"
+            )
+        log_path.write_text("\n".join(log_lines))
+        print(f"[+] Text log written to {log_path}")
+
     return result
 
 
@@ -422,12 +472,15 @@ def main() -> None:
     # and default to multiple formats.
     if args.auto:
         args.auto_docker = True
+        # Derive a base name of the form zap_<host>_<ddmmyy> under logs/zap_reports.
+        parsed = urlparse(args.target)
+        host = parsed.netloc or parsed.path or "target"
+        safe_host = host.replace(":", "_").replace(".", "_")
+        date_str = datetime.now().strftime("%d%m%y")
         if output_base is None:
-            # Derive a simple base name from the target host.
-            safe_target = args.target.replace("://", "_").replace("/", "_")
-            output_base = Path("logs") / "zap_reports" / f"zap_auto_{safe_target}"
+            output_base = Path("logs") / "zap_reports" / f"zap_{safe_host}_{date_str}"
         if not formats:
-            formats = ["json", "html", "md"]
+            formats = ["json", "html", "md", "xlsx"]
 
     # Quick availability check for the target before we start ZAP work.
     if not check_target_available(args.target, insecure=args.insecure):
