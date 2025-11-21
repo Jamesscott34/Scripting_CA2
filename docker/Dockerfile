@@ -2,7 +2,9 @@ FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
-COPY ca2_secure_website/requirements.txt .
+# Use the root-level requirements.txt (Docker build context is the repo root,
+# as configured in docker-compose.yml with context: ..).
+COPY requirements.txt .
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
