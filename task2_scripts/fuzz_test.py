@@ -265,6 +265,8 @@ def fuzz_endpoint(
     mutate: bool = False,
     fuzz_files: bool = False,
     session: Optional[requests.Session] = None,
+    aggregate: Optional[List[Dict[str, object]]] = None,
+    write_files: bool = True,
 ) -> None:
     """
     Send fuzzed HTTP requests to the given endpoint and print basic stats.
@@ -392,54 +394,66 @@ def fuzz_endpoint(
     mode_suffix = "" if payload_mode == "random" else f"_{payload_mode}"
     category_suffix = "" if not payload_category else f"_{payload_category}"
 
-    # Always ensure a logs directory for human-readable logs.
-    logs_dir = Path("logs")
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.log"
-
-    # If no JSON directory was provided, default to logs/json_logs.
-    if output_json is None:
-        output_dir = Path("logs") / "json_logs"
-    else:
-        # Treat output_json as a directory hint; if it includes a filename
-        # (e.g. ends with .json), we use its parent as the directory instead.
-        if output_json.suffix and not output_json.is_dir():
-            output_dir = output_json.parent
-        else:
-            output_dir = output_json
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    json_path = output_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.json"
+    mode_value = os.getenv("SECURE_MODE")
+    if mode_value is None:
+        # When fuzzing external targets there is no secure/insecure mode; use a
+        # descriptive fallback instead of "unknown".
+        mode_value = "external"
 
     data = {
-        "mode": os.getenv("SECURE_MODE", "unknown"),
+        "mode": mode_value,
         "base_url": base_url,
         "path": path,
-      "iterations": iterations,
-      "payload_mode": payload_mode,
-      "payload_category": payload_category,
-      "mutate_payloads": mutate,
-      "samples": samples,
+        "iterations": iterations,
+        "payload_mode": payload_mode,
+        "payload_category": payload_category,
+        "mutate_payloads": mutate,
+        "samples": samples,
     }
-    json_path.write_text(json.dumps(data, indent=2))
-    print(f"[+] JSON fuzz report written to {json_path}")
+    # Optionally add this run to an aggregate structure for combined reporting
+    # (single JSON / log / Excel file).
+    if aggregate is not None:
+        aggregate.append(data)
 
-    # Also write a short text log summarising the run.
-    summary_lines = [
-        f"Timestamp: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
-        f"Mode: {data['mode']}",
-        f"Base URL: {base_url}",
-        f"Path: {path}",
-        f"Iterations: {iterations}",
-        f"Payload mode: {payload_mode}",
-        "",
-        "Status code counts:",
-        *(f"  {code}: {status_codes.count(code)}" for code in sorted(set(status_codes))),
-        "",
-        f"JSON report: {json_path}",
-    ]
-    log_path.write_text("\n".join(summary_lines))
-    print(f"[+] Text fuzz log written to {log_path}")
+    if write_files:
+        # Always ensure a logs directory for human-readable logs.
+        logs_dir = Path("logs")
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.log"
+
+        # If no JSON directory was provided, default to logs/json_logs.
+        if output_json is None:
+            output_dir = Path("logs") / "json_logs"
+        else:
+            # Treat output_json as a directory hint; if it includes a filename
+            # (e.g. ends with .json), we use its parent as the directory instead.
+            if output_json.suffix and not output_json.is_dir():
+                output_dir = output_json.parent
+            else:
+                output_dir = output_json
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        json_path = output_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.json"
+
+        json_path.write_text(json.dumps(data, indent=2))
+        print(f"[+] JSON fuzz report written to {json_path}")
+
+        # Also write a short text log summarising the run.
+        summary_lines = [
+            f"Timestamp: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+            f"Mode: {data['mode']}",
+            f"Base URL: {base_url}",
+            f"Path: {path}",
+            f"Iterations: {iterations}",
+            f"Payload mode: {payload_mode}",
+            "",
+            "Status code counts:",
+            *(f"  {code}: {status_codes.count(code)}" for code in sorted(set(status_codes))),
+            "",
+            f"JSON report: {json_path}",
+        ]
+        log_path.write_text("\n".join(summary_lines))
+        print(f"[+] Text fuzz log written to {log_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -452,6 +466,7 @@ def parse_args() -> argparse.Namespace:
         help="Base URL of the running Django app (default: http://localhost:8000)",
     )
     parser.add_argument(
+        "-t",
         "--target",
         default=None,
         help=(
@@ -468,8 +483,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--iterations",
         type=int,
-        default=100,
-        help="Number of fuzzing iterations (default: 100).",
+        #change this to whatever you want auto to run at 
+        default=20,
+        help="Number of fuzzing iterations per run (default: 20).",
     )
     parser.add_argument(
         "--method",
@@ -565,9 +581,12 @@ def parse_args() -> argparse.Namespace:
         "--login-url",
         default=None,
         help=(
-            "Optional path to a login view (relative to base URL). When set "
-            "together with --login-username and --login-password, the fuzzer "
-            "will establish an authenticated session before sending requests."
+            "Optional path to a login view (relative to base URL), or the "
+            "special value 'auto'. When set together with "
+            "--login-username and --login-password, the fuzzer will "
+            "establish an authenticated session before sending requests. "
+            "When set to 'auto', common Django-style login paths such as "
+            "/accounts/login/ and /login/ will be tried in order."
         ),
     )
     parser.add_argument(
@@ -603,14 +622,28 @@ def main() -> None:
         )
 
     output_json = Path(args.output_json) if args.output_json else None
-    session = build_authenticated_session(
-        base_url=args.base_url,
-        login_url=args.login_url,
-        username=args.login_username,
-        password=args.login_password,
-        insecure=args.insecure,
-        timeout=args.timeout,
-    )
+    # Optionally establish an authenticated session. When --login-url=auto is
+    # used we try a small set of common login paths in order until one works.
+    session: Optional[requests.Session] = None
+    login_paths: List[str] = []
+    if args.login_url == "auto":
+        login_paths = ["/accounts/login/", "/login/"]
+    elif args.login_url:
+        login_paths = [args.login_url]
+
+    if args.login_username and args.login_password and login_paths:
+        for login_path in login_paths:
+            candidate = build_authenticated_session(
+                base_url=args.base_url,
+                login_url=login_path,
+                username=args.login_username,
+                password=args.login_password,
+                insecure=args.insecure,
+                timeout=args.timeout,
+            )
+            if candidate is not None:
+                session = candidate
+                break
     # Decide which payload categories to run.
     if args.all_categories:
         library = load_payload_library()
@@ -630,13 +663,22 @@ def main() -> None:
     else:
         paths = [args.path]
 
+    # In full auto mode we also build a combined in-memory representation of
+    # all fuzz runs, which can later be written to a single JSON/log/Excel
+    # report in addition to the per-run artefacts.
+    aggregate_runs: Optional[List[Dict[str, object]]] = [] if args.auto else None
+
     for path in paths:
         print(f"[*] Fuzzing path: {path}")
         for category in categories:
             if category:
                 print(f"[*] Using payload category: {category}")
 
-            # In auto mode we run *both* random and buffer_overflow fuzzing.
+            # In mode=auto we run *both* random and buffer_overflow fuzzing.
+            # When args.auto is set we only write aggregate outputs, not per-run
+            # JSON/log files.
+            write_files = not args.auto
+
             if args.mode == "auto":
                 output_dir = output_json
                 print("[*] Auto mode: running random fuzzing first...")
@@ -655,6 +697,8 @@ def main() -> None:
                     mutate=args.mutate_payloads,
                     fuzz_files=args.fuzz_files,
                     session=session,
+                    aggregate=aggregate_runs,
+                    write_files=write_files,
                 )
                 print("[*] Auto mode: running buffer_overflow fuzzing...")
                 fuzz_endpoint(
@@ -672,6 +716,8 @@ def main() -> None:
                     mutate=args.mutate_payloads,
                     fuzz_files=args.fuzz_files,
                     session=session,
+                    aggregate=aggregate_runs,
+                    write_files=write_files,
                 )
             else:
                 fuzz_endpoint(
@@ -689,7 +735,119 @@ def main() -> None:
                     mutate=args.mutate_payloads,
                     fuzz_files=args.fuzz_files,
                     session=session,
+                    aggregate=aggregate_runs,
+                    write_files=write_files,
                 )
+
+    # If we have collected aggregate data (full auto mode), emit combined JSON,
+    # log and an Excel workbook with one sheet per run.
+    if aggregate_runs:
+        parsed = urlparse(args.base_url)
+        host = parsed.netloc or parsed.path or "unknown"
+        safe_host = host.replace(":", "_").replace(".", "_")
+        date_str = datetime.now().strftime("%d%m%y")
+
+        aggregate_dir = Path("logs") / "json_logs"
+        aggregate_dir.mkdir(parents=True, exist_ok=True)
+        aggregate_json_path = aggregate_dir / f"fuzz_all_{safe_host}_{date_str}.json"
+
+        aggregate_payload = {
+            "base_url": args.base_url,
+            "generated_at": datetime.now().isoformat(),
+            "runs": aggregate_runs,
+        }
+        aggregate_json_path.write_text(json.dumps(aggregate_payload, indent=2))
+        print(f"[+] Aggregate JSON report written to {aggregate_json_path}")
+
+        # Aggregate text log with a short summary per run.
+        log_dir = Path("logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        aggregate_log_path = log_dir / f"fuzz_all_{safe_host}_{date_str}.log"
+
+        log_lines: List[str] = [
+            f"Aggregate fuzzing report for {args.base_url}",
+            f"Generated at: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+            "",
+        ]
+        for run in aggregate_runs:
+            samples = run.get("samples", [])
+            status_list = [
+                s.get("status_code")
+                for s in samples
+                if s.get("status_code") is not None
+            ]
+            status_counts: Dict[int, int] = {}
+            for code in status_list:
+                status_counts[code] = status_counts.get(code, 0) + 1
+
+            log_lines.append(
+                f"Path: {run.get('path')} | mode: {run.get('payload_mode')} | "
+                f"category: {run.get('payload_category')}"
+            )
+            log_lines.append(f"  Iterations: {run.get('iterations')}")
+            log_lines.append("  Status codes:")
+            for code in sorted(status_counts.keys()):
+                log_lines.append(f"    {code}: {status_counts[code]}")
+            log_lines.append("")
+
+        aggregate_log_path.write_text("\n".join(log_lines))
+        print(f"[+] Aggregate text log written to {aggregate_log_path}")
+
+        # Optional Excel export: requires openpyxl; if unavailable we skip
+        # gracefully.
+        try:
+            from openpyxl import Workbook  # type: ignore
+
+            excel_dir = Path("logs") / "excel"
+            excel_dir.mkdir(parents=True, exist_ok=True)
+            excel_path = excel_dir / f"fuzz_all_{safe_host}_{date_str}.xlsx"
+
+            wb = Workbook()
+            first_sheet = True
+            # Use the host (URL/IP) as the base worksheet title, truncated to
+            # Excel's 31-character limit. This avoids long, unreadable titles
+            # and the associated openpyxl warnings.
+            base_title = safe_host[:31] or "target"
+
+            for _run_idx, run in enumerate(aggregate_runs, start=1):
+                title = base_title
+
+                if first_sheet:
+                    ws = wb.active
+                    ws.title = title
+                    first_sheet = False
+                else:
+                    ws = wb.create_sheet(title=title)
+
+                ws.append(
+                    [
+                        "iteration",
+                        "path",
+                        "payload_mode",
+                        "payload_category",
+                        "has_file",
+                        "status_code",
+                    ]
+                )
+                for s in run.get("samples", []):
+                    ws.append(
+                        [
+                            s.get("iteration"),
+                            run.get("path"),
+                            run.get("payload_mode"),
+                            run.get("payload_category"),
+                            s.get("has_file", False),
+                            s.get("status_code"),
+                        ]
+                    )
+
+            wb.save(excel_path)
+            print(f"[+] Aggregate Excel report written to {excel_path}")
+        except ImportError:
+            print(
+                "[!] openpyxl is not installed; skipping Excel export. "
+                "Install it with 'pip install openpyxl' to enable Excel output."
+            )
 
 
 if __name__ == "__main__":
