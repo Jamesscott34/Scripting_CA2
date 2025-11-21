@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import random
+import re
 import string
 from datetime import datetime
 from pathlib import Path
@@ -124,6 +125,80 @@ def build_files(payload: str, enable_files: bool) -> Optional[Dict[str, Tuple[st
     return {"file": (filename, content.encode("utf-8", errors="ignore"), mime_type)}
 
 
+def build_authenticated_session(
+    base_url: str,
+    login_url: Optional[str],
+    username: Optional[str],
+    password: Optional[str],
+    insecure: bool,
+    timeout: float,
+) -> Optional[requests.Session]:
+    """
+    Optionally perform a simple login flow and return an authenticated session.
+
+    This helper is intentionally conservative and tuned for Django-style login
+    views:
+
+    - It performs a GET to fetch the login page and CSRF token.
+    - It then POSTs the username/password (and CSRF token if found).
+    - Any cookies set during this process are reused for subsequent fuzzing.
+
+    If any required parameter is missing or the login flow fails, the function
+    returns ``None`` and fuzzing falls back to unauthenticated requests.
+    """
+    if not (login_url and username and password):
+        return None
+
+    session = requests.Session()
+    verify = not insecure
+    full_login_url = base_url.rstrip("/") + "/" + login_url.lstrip("/")
+
+    try:
+        # Fetch login page to obtain CSRF cookie and token.
+        resp = session.get(full_login_url, timeout=timeout, verify=verify)
+    except requests.RequestException as exc:
+        print(f"[!] Failed to fetch login page {full_login_url}: {exc}")
+        return None
+
+    csrf_token = session.cookies.get("csrftoken")
+    if not csrf_token:
+        # Try to extract from HTML as a fallback.
+        match = re.search(
+            r"name=['\"]csrfmiddlewaretoken['\"][^>]*value=['\"]([^'\"]+)['\"]",
+            resp.text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            csrf_token = match.group(1)
+
+    data: Dict[str, str] = {
+        "username": username,
+        "password": password,
+    }
+    if csrf_token:
+        data["csrfmiddlewaretoken"] = csrf_token
+
+    try:
+        post_resp = session.post(
+            full_login_url,
+            data=data,
+            timeout=timeout,
+            verify=verify,
+        )
+        if post_resp.status_code >= 400:
+            print(
+                f"[!] Login POST to {full_login_url} returned status "
+                f"{post_resp.status_code}; continuing without auth."
+            )
+            return None
+    except requests.RequestException as exc:
+        print(f"[!] Failed to perform login POST to {full_login_url}: {exc}")
+        return None
+
+    print(f"[+] Authenticated session established via {full_login_url}")
+    return session
+
+
 def mutate_payload(payload: str) -> str:
     """
     Apply a simple mutation to a payload string.
@@ -177,6 +252,7 @@ def fuzz_endpoint(
     payload_category: Optional[str] = None,
     mutate: bool = False,
     fuzz_files: bool = False,
+    session: Optional[requests.Session] = None,
 ) -> None:
     """
     Send randomised GET requests to the given endpoint and print basic stats.
@@ -239,7 +315,8 @@ def fuzz_endpoint(
         last_exc: Optional[Exception] = None
         for attempt in range(1, retries + 1):
             try:
-                resp = requests.request(
+                client = session or requests
+                resp = client.request(
                     method,
                     url,
                     params=params,
@@ -447,12 +524,39 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of times to retry a request on network errors (default: 1).",
     )
+    parser.add_argument(
+        "--login-url",
+        default=None,
+        help=(
+            "Optional path to a login view (relative to base URL). When set "
+            "together with --login-username and --login-password, the fuzzer "
+            "will establish an authenticated session before sending requests."
+        ),
+    )
+    parser.add_argument(
+        "--login-username",
+        default=None,
+        help="Username to use for the optional login flow.",
+    )
+    parser.add_argument(
+        "--login-password",
+        default=None,
+        help="Password to use for the optional login flow.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output_json = Path(args.output_json) if args.output_json else None
+    session = build_authenticated_session(
+        base_url=args.base_url,
+        login_url=args.login_url,
+        username=args.login_username,
+        password=args.login_password,
+        insecure=args.insecure,
+        timeout=args.timeout,
+    )
     # Decide which payload categories to run.
     if args.all_categories:
         library = load_payload_library()
@@ -488,6 +592,7 @@ def main() -> None:
                 payload_category=category,
                 mutate=args.mutate_payloads,
                 fuzz_files=args.fuzz_files,
+                session=session,
             )
             print("[*] Auto mode: running buffer_overflow fuzzing...")
             fuzz_endpoint(
@@ -504,6 +609,7 @@ def main() -> None:
                 payload_category=category,
                 mutate=args.mutate_payloads,
                 fuzz_files=args.fuzz_files,
+                session=session,
             )
         else:
             fuzz_endpoint(
@@ -520,6 +626,7 @@ def main() -> None:
                 payload_category=category,
                 mutate=args.mutate_payloads,
                 fuzz_files=args.fuzz_files,
+                session=session,
             )
 
 
