@@ -124,6 +124,7 @@ def run_dast(
     login_password: Optional[str] = None,
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
+    poll_delay: float = 2.0,
 ) -> Dict[str, Any]:
     """Run a spider + active scan against the target and return ZAP alerts."""
 
@@ -195,7 +196,7 @@ def run_dast(
         scan_id = zap.spider.scan(target)
     while int(zap.spider.status(scan_id)) < 100:
         print(f"  - Spider progress: {zap.spider.status(scan_id)}%")
-        time.sleep(2)
+        time.sleep(poll_delay)
 
     print("[+] Starting active scan...")
     if user_id is not None:
@@ -204,7 +205,7 @@ def run_dast(
         active_id = zap.ascan.scan(target)
     while int(zap.ascan.status(active_id)) < 100:
         print(f"  - Active scan progress: {zap.ascan.status(active_id)}%")
-        time.sleep(2)
+        time.sleep(poll_delay)
 
     alerts = zap.core.alerts()
     print(f"[+] Scan complete. Total alerts: {len(alerts)}")
@@ -380,6 +381,24 @@ def parse_args() -> argparse.Namespace:
             "Default: json."
         ),
     )
+    parser.add_argument(
+        "--poll-delay",
+        type=float,
+        default=2.0,
+        help="Delay in seconds between ZAP spider/scan status polls (default: 2.0).",
+    )
+    parser.add_argument(
+        "--fail-on-high",
+        action="store_true",
+        help="Exit with non-zero status if any High risk alerts are found.",
+    )
+    parser.add_argument(
+        "--fail-on-medium",
+        action="store_true",
+        help=(
+            "Exit with non-zero status if any Medium or High risk alerts are found."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -436,7 +455,7 @@ def main() -> None:
                 return
 
     try:
-        run_dast(
+        result = run_dast(
             target=args.target,
             api_key=args.api_key,
             zap_host=args.zap_host,
@@ -449,11 +468,30 @@ def main() -> None:
             login_password=args.login_password,
             include=args.include,
             exclude=args.exclude,
+            poll_delay=args.poll_delay,
         )
     finally:
         # If we started Docker automatically, clean it up.
         if args.auto_docker:
             stop_zap_docker(args.docker_container)
+
+    # Optionally fail the process based on alert severities (CI-style usage).
+    if result is not None:
+        severities = result.get("severity_summary", {})
+        high = int(severities.get("High", 0) or 0)
+        medium = int(severities.get("Medium", 0) or 0)
+
+        if args.fail_on_high and high > 0:
+            print(
+                f"[!] Failing due to {high} High risk alerts (per --fail-on-high)."
+            )
+            raise SystemExit(1)
+        if args.fail_on_medium and (medium > 0 or high > 0):
+            print(
+                "[!] Failing due to Medium/High risk alerts "
+                f"(High={high}, Medium={medium}) per --fail-on-medium."
+            )
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
