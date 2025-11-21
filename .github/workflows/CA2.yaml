@@ -14,6 +14,9 @@ on:
 jobs:
   test-and-security:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
 
     steps:
       # 1) Get the source code.
@@ -24,21 +27,41 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
-      # 3) Install top-level dependencies (including security tooling deps).
+      # 3) Cache pip downloads to speed up subsequent runs.
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'ca2_secure_website/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 4) Install top-level dependencies (including security tooling deps).
       - name: Install root requirements.txt
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 4) Install Django application requirements and Bandit.
+      # 5) Install Django application requirements and Bandit.
       - name: Install Django app requirements
         run: |
           pip install -r ca2_secure_website/requirements.txt
           pip install bandit
 
-      # 5) Run Django tests against a fresh SQLite database in SECURE mode.
+      # 6) Run dependency vulnerability scanners (pip-audit and Safety).
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit --strict
+
+      - name: Run Safety
+        run: |
+          pip install safety
+          safety check --bare
+
+      # 7) Run Django tests against a fresh SQLite database in SECURE mode.
       #    SECURE_MODE=secure enables all protections; TEST_MODE=secure ensures
       #    Task 2 integration tests only exercise the secure path.
       - name: Run Django tests (secure mode, SQLite)
@@ -51,7 +74,7 @@ jobs:
           python manage.py migrate
           TEST_MODE=secure python manage.py test
 
-      # 6) Run Django tests again but in INSECURE mode.
+      # 8) Run Django tests again but in INSECURE mode.
       #    SECURE_MODE=insecure switches to the intentionally vulnerable paths
       #    (raw SQL, XSS-friendly output, CSRF disabled) so tests and scripts
       #    can demonstrate real issues.
@@ -63,13 +86,17 @@ jobs:
         run: |
           TEST_MODE=insecure python manage.py test
 
-      # 7) Run Bandit SAST against the Django project.
-      #    This is mode-agnostic: it always scans the same codebase.
-      - name: Run Bandit SAST
+      # 9) Run Bandit SAST and upload SARIF for GitHub code scanning.
+      - name: Run Bandit SAST (SARIF)
         run: |
-          bandit -r ca2_secure_website -q
+          bandit -r ca2_secure_website -f sarif -o bandit.sarif
 
-      # 8) Build and start the Docker Compose stack (web + db).
+      - name: Upload Bandit SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit.sarif
+
+      # 10) Build and start the Docker Compose stack (web + db).
       #    This ensures the Dockerised app can be built and run successfully.
       - name: Build and start Docker Compose
         working-directory: docker
@@ -78,7 +105,21 @@ jobs:
           docker compose version
           docker compose up -d --build
 
-      # 9) Run Django tests *inside* the Docker web container in both modes.
+      # 11) Scan the built Docker image with Trivy for container vulnerabilities.
+      - name: Scan Docker Image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "ca2_web:latest"
+          format: "table"
+          exit-code: "1"
+
+      # 12) Tag Docker image with commit SHA to support rollbacks.
+      - name: Tag Docker image
+        working-directory: docker
+        run: |
+          docker tag ca2_web:latest ca2_web:${{ github.sha }}
+
+      # 13) Run Django tests *inside* the Docker web container in both modes.
       #    SECURE_MODE environment variable is passed through to run tests
       #    first in secure, then in insecure mode.
       - name: Run Django tests inside Docker (secure and insecure)
@@ -89,7 +130,27 @@ jobs:
           docker compose run --rm -e SECURE_MODE=secure web python manage.py test
           docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
 
-      # 10) Always stop containers and remove volumes to keep CI clean.
+      # 14) Run an OWASP ZAP DAST scan against the Dockerised app.
+      - name: Run ZAP DAST scan
+        run: |
+          python task2_scripts/dast_zap.py \
+            -t http://127.0.0.1:8000 \
+            --auto \
+            --fail-on-medium
+
+      # 15) Upload logs and security reports as CI artefacts for CA2 evidence.
+      - name: Upload logs and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-and-reports
+          path: |
+            logs
+            logs/json_logs
+            logs/excel
+            logs/zap_reports
+
+      # 16) Always stop containers and remove volumes to keep CI clean.
       - name: Stop Docker Compose and clean volumes
         if: always()
         working-directory: docker
