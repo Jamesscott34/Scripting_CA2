@@ -25,6 +25,7 @@ import os
 import random
 import re
 import string
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -45,6 +46,17 @@ AUTO_PATHS = [
     "/profile/",         # user profile
     "/dashboard/",       # overview/dashboard
     "/search/",          # search endpoint
+]
+
+# Simple patterns that often indicate server-side errors or stack traces.
+ERROR_PATTERNS: List[str] = [
+    "Traceback",
+    "Exception",
+    "django.db",
+    "psycopg2",
+    "OperationalError",
+    "UNIQUE constraint failed",
+    "TemplateSyntaxError",
 ]
 
 
@@ -322,7 +334,9 @@ def fuzz_endpoint(
 
     print(f"[+] Fuzzing endpoint: {method} {url} (iterations={iterations})")
     status_codes: List[int] = []
-    samples = []
+    samples: List[Dict[str, object]] = []
+    durations: List[float] = []
+    lengths: List[int] = []
 
     payload_library: Dict[str, List[str]] = {}
     if payload_category:
@@ -384,6 +398,7 @@ def fuzz_endpoint(
         for attempt in range(1, retries + 1):
             try:
                 client = session or requests
+                start_ts = time.perf_counter()
                 resp = client.request(
                     method,
                     url,
@@ -396,7 +411,32 @@ def fuzz_endpoint(
                     timeout=timeout,
                     verify=verify,
                 )
-                status_codes.append(resp.status_code)
+                duration = time.perf_counter() - start_ts
+                body_len = len(resp.content or b"")
+                redirects = len(resp.history or [])
+
+                # Basic error / anomaly signals
+                status = resp.status_code
+                is_5xx = 500 <= status < 600
+                text_snippet = resp.text[:2000] if hasattr(resp, "text") else ""
+                has_error_signature = any(pat in text_snippet for pat in ERROR_PATTERNS)
+
+                # Reflection detection for XSS-style issues – only check for
+                # reasonably short payloads to avoid excessive work.
+                reflected = False
+                if len(base) <= 200 and base in text_snippet:
+                    reflected = True
+
+                rate_limited = status == 429
+                if rate_limited:
+                    # Simple rate-limit awareness: back off briefly before the
+                    # next request.
+                    time.sleep(1.0)
+
+                status_codes.append(status)
+                durations.append(duration)
+                lengths.append(body_len)
+
                 samples.append(
                     {
                         "iteration": i,
@@ -406,7 +446,14 @@ def fuzz_endpoint(
                         "has_file": bool(files),
                         "has_headers": bool(headers),
                         "has_cookies": bool(cookies),
-                        "status_code": resp.status_code,
+                        "status_code": status,
+                        "duration": duration,
+                        "response_length": body_len,
+                        "redirects": redirects,
+                        "is_5xx": is_5xx,
+                        "has_error_signature": has_error_signature,
+                        "reflected": reflected,
+                        "rate_limited": rate_limited,
                     }
                 )
                 if i % 10 == 0:
@@ -437,6 +484,42 @@ def fuzz_endpoint(
     print("[+] Fuzzing complete. Status code counts:")
     for code in sorted(set(status_codes)):
         print(f"    {code}: {status_codes.count(code)}")
+
+    # Derive simple baselines for anomaly detection.
+    avg_duration = sum(durations) / len(durations) if durations else None
+    avg_length = sum(lengths) / len(lengths) if lengths else None
+
+    for sample in samples:
+        reasons: List[str] = []
+        status = sample.get("status_code")
+        duration = sample.get("duration")
+        length = sample.get("response_length")
+        redirects = sample.get("redirects", 0) or 0
+
+        if isinstance(duration, (int, float)) and avg_duration and duration > avg_duration * 3:
+            reasons.append("slow_response")
+        if isinstance(length, int) and avg_length and length > avg_length * 4:
+            reasons.append("large_body")
+        if sample.get("is_5xx"):
+            reasons.append("5xx_error")
+        if sample.get("has_error_signature"):
+            reasons.append("error_signature")
+        if sample.get("rate_limited"):
+            reasons.append("rate_limited")
+        if sample.get("reflected"):
+            reasons.append("reflected_payload")
+        if redirects > 10:
+            reasons.append("redirect_loop")
+
+        # Treat 4xx other than 404 as potential anomalies/crashes as well.
+        if isinstance(status, int) and status >= 400 and status not in (404, 429):
+            reasons.append("client_error")
+
+        if reasons:
+            sample["anomaly"] = True
+            sample["anomaly_reasons"] = reasons
+        else:
+            sample["anomaly"] = False
 
     # Determine output directory and filenames.
     parsed = urlparse(base_url)
