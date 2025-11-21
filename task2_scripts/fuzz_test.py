@@ -6,7 +6,8 @@ This script is intentionally simple but demonstrates several important ideas:
 - Sending unexpected input (including punctuation and long strings) to HTTP
   endpoints to see how they behave under stress.
 - Supporting multiple HTTP methods (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS).
-- Fuzzing both **query parameters** and **request bodies** (JSON or form).
+- Fuzzing both **query parameters** and **request bodies** (JSON or form),
+  including optional multipart file uploads.
 - Using structured **payload categories** (SQLi, XSS, path traversal, Unicode,
   Django template injections) loaded from a JSON library file.
 - Recording every request/response pair in a JSON file for later analysis or
@@ -99,6 +100,30 @@ def build_bodies(payload: str, body_type: str) -> Tuple[Optional[Dict[str, str]]
     return None, None
 
 
+def build_files(payload: str, enable_files: bool) -> Optional[Dict[str, Tuple[str, bytes, str]]]:
+    """
+    Optionally build a multipart file upload payload.
+
+    The contents of the generated "file" are not intended to be realistic
+    documents; instead we focus on sending arbitrarily-sized blobs which can
+    trigger validation and size-handling paths in the target application.
+    """
+    if not enable_files:
+        return None
+
+    # Use the payload as the basis of the file content, expanding it if
+    # necessary to exercise larger upload paths.
+    content = payload
+    if len(content) < 1024:
+        # Repeat the payload until we reach at least ~1KB.
+        repeat = max(1, 1024 // max(1, len(content)))
+        content = (content or "X") * repeat
+
+    filename = "fuzz_upload.txt"
+    mime_type = "text/plain"
+    return {"file": (filename, content.encode("utf-8", errors="ignore"), mime_type)}
+
+
 def mutate_payload(payload: str) -> str:
     """
     Apply a simple mutation to a payload string.
@@ -151,6 +176,7 @@ def fuzz_endpoint(
     retries: int = 1,
     payload_category: Optional[str] = None,
     mutate: bool = False,
+    fuzz_files: bool = False,
 ) -> None:
     """
     Send randomised GET requests to the given endpoint and print basic stats.
@@ -204,6 +230,12 @@ def fuzz_endpoint(
             body_type=body_type,
         )
 
+        files = build_files(base, enable_files=fuzz_files)
+
+        # When sending multipart/form-data with files we typically pair it with
+        # simple form fields rather than JSON bodies.
+        effective_json = None if files else json_body
+
         last_exc: Optional[Exception] = None
         for attempt in range(1, retries + 1):
             try:
@@ -211,8 +243,9 @@ def fuzz_endpoint(
                     method,
                     url,
                     params=params,
-                    json=json_body,
+                    json=effective_json,
                     data=form_body,
+                    files=files,
                     timeout=timeout,
                     verify=verify,
                 )
@@ -221,8 +254,9 @@ def fuzz_endpoint(
                     {
                         "iteration": i,
                         "params": params,
-                        "json": json_body,
+                        "json": effective_json,
                         "data": form_body,
+                        "has_file": bool(files),
                         "status_code": resp.status_code,
                     }
                 )
@@ -241,8 +275,9 @@ def fuzz_endpoint(
                 {
                     "iteration": i,
                     "params": params,
-                    "json": json_body,
+                    "json": effective_json,
                     "data": form_body,
+                    "has_file": bool(files),
                     "status_code": None,
                     "error": str(last_exc),
                 }
@@ -382,6 +417,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fuzz-files",
+        action="store_true",
+        help=(
+            "Enable multipart file upload fuzzing alongside query/body fuzzing. "
+            "This is useful for testing upload endpoints such as profile image "
+            "or document submission views."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         default=None,
         help="Optional path to write a JSON report of fuzzed queries and status codes.",
@@ -443,6 +487,7 @@ def main() -> None:
                 retries=args.retries,
                 payload_category=category,
                 mutate=args.mutate_payloads,
+                fuzz_files=args.fuzz_files,
             )
             print("[*] Auto mode: running buffer_overflow fuzzing...")
             fuzz_endpoint(
@@ -458,6 +503,7 @@ def main() -> None:
                 retries=args.retries,
                 payload_category=category,
                 mutate=args.mutate_payloads,
+                fuzz_files=args.fuzz_files,
             )
         else:
             fuzz_endpoint(
@@ -473,6 +519,7 @@ def main() -> None:
                 retries=args.retries,
                 payload_category=category,
                 mutate=args.mutate_payloads,
+                fuzz_files=args.fuzz_files,
             )
 
 
