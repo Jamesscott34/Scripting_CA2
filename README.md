@@ -41,7 +41,7 @@ Default demo logins:
 
 From the **project root** (with the app running on `http://127.0.0.1:8001`):
 
-- **Fuzz testing (advanced, HTTP + JSON/form + files)**:
+- **Fuzz testing (advanced, HTTP + JSON/form + files + headers/cookies + replay)**:
 
   - **Full‑auto multi-endpoint fuzzing** against a target URL/IP:
 
@@ -57,12 +57,14 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
     - Use all payload categories (`sql`, `xss`, `path`, `unicode`, `django`).
     - Run both `random` and `buffer_overflow` payload modes.
     - Mutate payloads and attach fuzzed file uploads.
+    - Record timing, response size, redirects and annotate anomalies
+      (slow responses, big responses, 5xx, error signatures, reflection, etc.).
     - Produce **one combined report set**:
       - JSON: `logs/json_logs/fuzz_all_<host>_<ddmmyy>.json`
       - Text log: `logs/fuzz_all_<host>_<ddmmyy>.log`
-      - Excel (one sheet per run): `logs/excel/fuzz_all_<host>_<ddmmyy>.xlsx`
+      - Excel (per‑run sheets): `logs/excel/fuzz_all_<host>_<ddmmyy>.xlsx`
 
-    By default auto mode uses **20 iterations** per run; you can override:
+    Auto mode uses **20 iterations** per run by default; override with:
 
     ```bash
     python task2_scripts/fuzz_test.py \
@@ -71,7 +73,44 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
       --iterations 50
     ```
 
-  - **Targeted fuzz of a single endpoint** (keeps per‑run JSON/logs):
+    To speed up and simulate load, add concurrency:
+
+    ```bash
+    python task2_scripts/fuzz_test.py \
+      -t http://127.0.0.1:8001 \
+      --auto \
+      --threads 4
+    ```
+
+  - **Headers and cookies fuzzing**:
+
+    - Create JSON files, e.g. `headers.json` and `cookies.json`:
+
+      ```json
+      {
+        "X-Student-Fuzz": "<fuzz>",
+        "User-Agent": "CA2-Fuzzer/1.0"
+      }
+      ```
+
+      ```json
+      {
+        "sessionid": "<fuzz>",
+        "csrftoken": "static-or-<fuzz>"
+      }
+      ```
+
+    - Run with:
+
+      ```bash
+      python task2_scripts/fuzz_test.py \
+        -t http://127.0.0.1:8001 \
+        --auto \
+        --headers-file task2_scripts/headers.json \
+        --cookies-file task2_scripts/cookies.json
+      ```
+
+  - **Targeted fuzz of a single endpoint** (keeps per‑run JSON/logs and uses any feature you enable):
 
     ```bash
     python task2_scripts/fuzz_test.py \
@@ -79,11 +118,13 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
       --path /search/ \
       --mode auto \
       --payload-category sql \
-      --iterations 50
+      --iterations 50 \
+      --fuzz-files \
+      --headers-file task2_scripts/headers.json
     ```
 
-    Outputs will be placed under `logs/` and `logs/json_logs/` with filenames
-    including the host, path and date.
+    Outputs are stored under `logs/` and `logs/json_logs/` with host+path+date
+    in the filename.
 
   - **Optional authenticated fuzzing** (Django-style login with CSRF):
 
@@ -98,6 +139,26 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
 
     `--login-url auto` will try `/accounts/login/` and `/login/` in order,
     establishing a session and then reusing it for all fuzz requests.
+
+  - **Replay and replay‑mutation** (for debugging interesting findings):
+
+    - Exact replay of a previous aggregate run:
+
+      ```bash
+      python task2_scripts/fuzz_test.py \
+        --replay logs/json_logs/fuzz_all_127_0_0_1_8001_211125.json
+      ```
+
+    - Replay with additional mutation of each original payload:
+
+      ```bash
+      python task2_scripts/fuzz_test.py \
+        --replay-mutate logs/json_logs/fuzz_all_127_0_0_1_8001_211125.json
+      ```
+
+    These commands re-send the recorded payloads (optionally mutated) to the
+    current target and print the resulting status codes; they do not create new
+    JSON/Excel files.
 
 - **SAST (Bandit)** – via `sast_bandit.py`, with secure/insecure modes:
 

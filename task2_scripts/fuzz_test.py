@@ -26,15 +26,13 @@ import random
 import re
 import string
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
-
-# Path to JSON file defining structured payload categories.
-PAYLOAD_LIBRARY_PATH = Path(__file__).with_name("payloads.json")
 
 # Default endpoints to fuzz when running in full automatic mode. These are
 # chosen to work well with the CA2 banking application but are also sensible
@@ -58,6 +56,48 @@ ERROR_PATTERNS: List[str] = [
     "UNIQUE constraint failed",
     "TemplateSyntaxError",
 ]
+
+# Built-in payload categories used for targeted fuzzing. These are hard-coded
+# so that the fuzzer has sensible defaults even without any external files.
+PAYLOAD_LIBRARY: Dict[str, List[str]] = {
+    "sql": [
+        "' OR '1'='1",
+        "' OR 1=1 --",
+        '" OR "1"="1" --',
+        "admin'--",
+        "' UNION SELECT NULL,NULL,NULL--",
+        "'; DROP TABLE users;--",
+    ],
+    "xss": [
+        "<script>alert('XSS')</script>",
+        "<img src=x onerror=alert(1)>",
+        '\"><script>alert(1)</script>',
+        "<svg/onload=alert(1)>",
+        "<body onload=alert('xss')>",
+    ],
+    "path": [
+        "../etc/passwd",
+        "../../../../../etc/passwd",
+        "..\\..\\..\\..\\windows\\win.ini",
+        "/../../../../../../etc/shadow",
+        "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
+    ],
+    "unicode": [
+        "测试",
+        "áéíóúÁÉÍÓÚ",
+        "😀😃😄😁😆😅😂🤣",
+        "\u202eevil.exe",
+        "null-byte-\u0000-test",
+    ],
+    "django": [
+        "{{7*7}}",
+        "{% debug %}",
+        "{% load static %}",
+        "{% if 1 %}test{% endif %}",
+        "{{ request.user.username }}",
+        "{{ settings.SECRET_KEY }}",
+    ],
+}
 
 
 def load_kv_json(path: Optional[str], label: str) -> Dict[str, str]:
@@ -98,29 +138,16 @@ def load_kv_json(path: Optional[str], label: str) -> Dict[str, str]:
 
 def load_payload_library() -> Dict[str, List[str]]:
     """
-    Load structured payload categories from a JSON file.
+    Return the built-in structured payload categories.
 
-    The JSON file maps category names (e.g. "sql", "xss", "django") to lists of
-    payload strings. This makes it easy to extend the fuzzer without changing
-    any Python code.
+    Categories include:
+    - sql
+    - xss
+    - path
+    - unicode
+    - django
     """
-    if not PAYLOAD_LIBRARY_PATH.exists():
-        return {}
-
-    try:
-        with PAYLOAD_LIBRARY_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        # Fail closed: if the file is unreadable or invalid, just return an
-        # empty mapping and fall back to purely random payload generation.
-        return {}
-
-    # Normalise all values to lists of strings.
-    library: Dict[str, List[str]] = {}
-    for name, values in data.items():
-        if isinstance(values, list):
-            library[name] = [str(v) for v in values]
-    return library
+    return PAYLOAD_LIBRARY
 
 
 def random_string(min_len: int = 1, max_len: int = 50) -> str:
@@ -343,8 +370,8 @@ def fuzz_endpoint(
         payload_library = load_payload_library()
         if payload_category not in payload_library:
             print(
-                f"[!] Payload category '{payload_category}' was not found in "
-                f"{PAYLOAD_LIBRARY_PATH}. Falling back to random strings."
+                f"[!] Payload category '{payload_category}' is not defined in "
+                "the built-in payload library. Falling back to random strings."
             )
             payload_category = None
 
@@ -756,6 +783,22 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Password to use for the optional login flow.",
     )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        help="Number of worker threads to use for concurrent fuzzing (default: 1).",
+    )
+    parser.add_argument(
+        "--replay",
+        default=None,
+        help="Path to a fuzz JSON report to replay exactly.",
+    )
+    parser.add_argument(
+        "--replay-mutate",
+        default=None,
+        help="Path to a fuzz JSON report to replay with additional mutation applied.",
+    )
     return parser.parse_args()
 
 
@@ -781,6 +824,92 @@ def main() -> None:
     output_json = Path(args.output_json) if args.output_json else None
     base_headers = load_kv_json(args.headers_file, label="headers")
     base_cookies = load_kv_json(args.cookies_file, label="cookies")
+
+    # If replay is requested, skip normal fuzzing and just resend requests
+    # recorded in a previous JSON report.
+    if args.replay or args.replay_mutate:
+        report_path = args.replay_mutate or args.replay
+        mutate = bool(args.replay_mutate)
+        if not report_path:
+            print("[!] --replay/--replay-mutate requires a JSON path.")
+            return
+
+        p = Path(report_path)
+        if not p.exists():
+            print(f"[!] Replay JSON file '{report_path}' does not exist.")
+            return
+
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"[!] Failed to parse replay JSON '{report_path}': {exc}")
+            return
+
+        # Support both aggregate JSON (with "runs") and single-run JSON.
+        runs = payload.get("runs")
+        if not isinstance(runs, list):
+            runs = [payload]
+
+        client = requests.Session()
+        verify = not args.insecure
+        print(f"[*] Replaying {len(runs)} run(s) from {report_path} (mutate={mutate})")
+
+        for run in runs:
+            base_url = str(run.get("base_url", args.base_url))
+            path = str(run.get("path", args.path))
+            url = base_url.rstrip("/") + "/" + path.lstrip("/")
+            print(f"[+] Replaying run for {url}")
+
+            for sample in run.get("samples", []):
+                original = sample.get("params", {}).get("q", "")
+                if not isinstance(original, str):
+                    continue
+                payload_str = mutate_payload(original) if mutate else original
+                params = {"q": payload_str}
+
+                json_body, form_body = build_bodies(
+                    payload=payload_str,
+                    body_type=args.body_type,
+                )
+                files = build_files(payload_str, enable_files=args.fuzz_files)
+                effective_json = None if files else json_body
+
+                headers: Optional[Dict[str, str]] = None
+                cookies: Optional[Dict[str, str]] = None
+                if base_headers:
+                    headers = {
+                        name: value.replace("<fuzz>", payload_str)
+                        for name, value in base_headers.items()
+                    }
+                if base_cookies:
+                    cookies = {
+                        name: value.replace("<fuzz>", payload_str)
+                        for name, value in base_cookies.items()
+                    }
+
+                try:
+                    resp = client.request(
+                        args.method,
+                        url,
+                        params=params,
+                        json=effective_json,
+                        data=form_body,
+                        files=files,
+                        headers=headers,
+                        cookies=cookies,
+                        timeout=args.timeout,
+                        verify=verify,
+                    )
+                    print(
+                        f"  - Replayed iteration {sample.get('iteration')} -> "
+                        f"status {resp.status_code}"
+                    )
+                except requests.RequestException as exc:
+                    print(
+                        f"  ! Replay error at iteration {sample.get('iteration')}: {exc}"
+                    )
+
+        return
     # Optionally establish an authenticated session. When --login-url=auto is
     # used we try a small set of common login paths in order until one works.
     session: Optional[requests.Session] = None
@@ -827,82 +956,95 @@ def main() -> None:
     # report in addition to the per-run artefacts.
     aggregate_runs: Optional[List[Dict[str, object]]] = [] if args.auto else None
 
-    for path in paths:
+    # Build a list of (path, category) jobs.
+    jobs: List[Tuple[str, Optional[str]]] = [
+        (p, c) for p in paths for c in categories
+    ]
+
+    def run_job(job: Tuple[str, Optional[str]]) -> None:
+        path, category = job
         print(f"[*] Fuzzing path: {path}")
-        for category in categories:
-            if category:
-                print(f"[*] Using payload category: {category}")
+        if category:
+            print(f"[*] Using payload category: {category}")
 
-            # In mode=auto we run *both* random and buffer_overflow fuzzing.
-            # When args.auto is set we only write aggregate outputs, not per-run
-            # JSON/log files.
-            write_files = not args.auto
+        # In mode=auto we run *both* random and buffer_overflow fuzzing.
+        # When args.auto is set we only write aggregate outputs, not per-run
+        # JSON/log files.
+        write_files = not args.auto
 
-            if args.mode == "auto":
-                output_dir = output_json
-                print("[*] Auto mode: running random fuzzing first...")
-                fuzz_endpoint(
-                    args.base_url,
-                    path,
-                    args.iterations,
-                    output_json=output_dir,
-                    payload_mode="random",
-                    method=args.method,
-                    body_type=args.body_type,
-                    insecure=args.insecure,
-                    timeout=args.timeout,
-                    retries=args.retries,
-                    payload_category=category,
-                    mutate=args.mutate_payloads,
-                    fuzz_files=args.fuzz_files,
-                    session=session,
-                    aggregate=aggregate_runs,
-                    write_files=write_files,
-                    base_headers=base_headers,
-                    base_cookies=base_cookies,
-                )
-                print("[*] Auto mode: running buffer_overflow fuzzing...")
-                fuzz_endpoint(
-                    args.base_url,
-                    path,
-                    args.iterations,
-                    output_json=output_dir,
-                    payload_mode="buffer_overflow",
-                    method=args.method,
-                    body_type=args.body_type,
-                    insecure=args.insecure,
-                    timeout=args.timeout,
-                    retries=args.retries,
-                    payload_category=category,
-                    mutate=args.mutate_payloads,
-                    fuzz_files=args.fuzz_files,
-                    session=session,
-                    aggregate=aggregate_runs,
-                    write_files=write_files,
-                    base_headers=base_headers,
-                    base_cookies=base_cookies,
-                )
-            else:
-                fuzz_endpoint(
-                    args.base_url,
-                    path,
-                    args.iterations,
-                    output_json=output_json,
-                    payload_mode=args.mode,
-                    method=args.method,
-                    body_type=args.body_type,
-                    insecure=args.insecure,
-                    timeout=args.timeout,
-                    retries=args.retries,
-                    payload_category=category,
-                    mutate=args.mutate_payloads,
-                    fuzz_files=args.fuzz_files,
-                    session=session,
-                    aggregate=aggregate_runs,
-                    write_files=write_files,
-                    base_headers=base_headers,
-                    base_cookies=base_cookies,
-                )
+        if args.mode == "auto":
+            output_dir = output_json
+            print("[*] Auto mode: running random fuzzing first...")
+            fuzz_endpoint(
+                args.base_url,
+                path,
+                args.iterations,
+                output_json=output_dir,
+                payload_mode="random",
+                method=args.method,
+                body_type=args.body_type,
+                insecure=args.insecure,
+                timeout=args.timeout,
+                retries=args.retries,
+                payload_category=category,
+                mutate=args.mutate_payloads,
+                fuzz_files=args.fuzz_files,
+                session=session,
+                aggregate=aggregate_runs,
+                write_files=write_files,
+                base_headers=base_headers,
+                base_cookies=base_cookies,
+            )
+            print("[*] Auto mode: running buffer_overflow fuzzing...")
+            fuzz_endpoint(
+                args.base_url,
+                path,
+                args.iterations,
+                output_json=output_dir,
+                payload_mode="buffer_overflow",
+                method=args.method,
+                body_type=args.body_type,
+                insecure=args.insecure,
+                timeout=args.timeout,
+                retries=args.retries,
+                payload_category=category,
+                mutate=args.mutate_payloads,
+                fuzz_files=args.fuzz_files,
+                session=session,
+                aggregate=aggregate_runs,
+                write_files=write_files,
+                base_headers=base_headers,
+                base_cookies=base_cookies,
+            )
+        else:
+            fuzz_endpoint(
+                args.base_url,
+                path,
+                args.iterations,
+                output_json=output_json,
+                payload_mode=args.mode,
+                method=args.method,
+                body_type=args.body_type,
+                insecure=args.insecure,
+                timeout=args.timeout,
+                retries=args.retries,
+                payload_category=category,
+                mutate=args.mutate_payloads,
+                fuzz_files=args.fuzz_files,
+                session=session,
+                aggregate=aggregate_runs,
+                write_files=write_files,
+                base_headers=base_headers,
+                base_cookies=base_cookies,
+            )
+
+    if args.threads > 1 and len(jobs) > 1:
+        print(f"[*] Running fuzzing with {args.threads} worker threads...")
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            list(executor.map(run_job, jobs))
+    else:
+        for job in jobs:
+            run_job(job)
 
     # If we have collected aggregate data (full auto mode), emit combined JSON,
     # log and an Excel workbook with one sheet per run.
@@ -958,8 +1100,7 @@ def main() -> None:
         aggregate_log_path.write_text("\n".join(log_lines))
         print(f"[+] Aggregate text log written to {aggregate_log_path}")
 
-        # Optional Excel export: requires openpyxl; if unavailable we skip
-        # gracefully.
+       
         try:
             from openpyxl import Workbook  # type: ignore
 
@@ -969,9 +1110,8 @@ def main() -> None:
 
             wb = Workbook()
             first_sheet = True
-            # Use the host (URL/IP) as the base worksheet title, truncated to
-            # Excel's 31-character limit. This avoids long, unreadable titles
-            # and the associated openpyxl warnings.
+            # Use the host (URL/IP) as the base worksheet title,
+            
             base_title = safe_host[:31] or "target"
 
             for _run_idx, run in enumerate(aggregate_runs, start=1):
