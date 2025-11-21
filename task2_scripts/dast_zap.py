@@ -1,8 +1,6 @@
 """
 Advanced OWASP ZAP DAST helper for the CA2 Django project.
 
-Assumptions:
-- You are authorised to test the target application.
 
 What this script does:
 - Optionally starts a ZAP daemon in Docker for you (if requested).
@@ -18,8 +16,9 @@ import json
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import requests
 from zapv2 import ZAPv2
 
 
@@ -78,28 +77,131 @@ def stop_zap_docker(container_name: str) -> None:
     subprocess.run(["docker", "rm", "-f", container_name], check=False)
 
 
+def check_target_available(target: str, insecure: bool) -> bool:
+    """
+    Perform a quick availability check against the target before scanning.
+
+    This sends a HEAD request and checks for:
+    - Reachability (no connection / TLS errors)
+    - Reasonable status codes (200/3xx/401/403)
+    - No obvious redirect loops
+    """
+    verify = not insecure
+
+    try:
+        resp = requests.head(
+            target, timeout=5, allow_redirects=True, verify=verify
+        )
+    except requests.RequestException as exc:
+        print(f"[!] Failed to reach target '{target}': {exc}")
+        return False
+
+    if len(resp.history) > 10:
+        print(f"[!] Target '{target}' appears to be in a redirect loop.")
+        return False
+
+    if resp.status_code not in {200, 301, 302, 401, 403}:
+        print(
+            f"[!] HEAD {target} returned status {resp.status_code}, "
+            "which may indicate the app is not ready for scanning."
+        )
+        return False
+
+    print(f"[+] Target pre-check OK (status {resp.status_code}).")
+    return True
+
+
 def run_dast(
     target: str,
     api_key: str,
     zap_host: str,
     zap_port: int,
     output_json: Optional[Path] = None,
+    output_base: Optional[Path] = None,
+    formats: Optional[List[str]] = None,
+    login_url: Optional[str] = None,
+    login_username: Optional[str] = None,
+    login_password: Optional[str] = None,
+    include: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run a spider + active scan against the target and return ZAP alerts."""
 
     zap = _zap_client(api_key, zap_host, zap_port)
 
+    # Create a context so that include/exclude rules and authentication can be
+    # scoped cleanly to this target.
+    context_name = "ca2-context"
+    context_id = zap.context.new_context(context_name)
+
+    # Include rules: default to the target host, plus any user-specified
+    # patterns.
+    include = include or []
+    if not include:
+        include.append(f"{target}.*")
+    for pattern in include:
+        print(f"[+] Including in context: {pattern}")
+        zap.context.include_in_context(context_name, pattern)
+
+    # Exclude rules: apply both at the context level and to spider/ascan.
+    for pattern in exclude or []:
+        print(f"[+] Excluding from context/scan: {pattern}")
+        zap.context.exclude_from_context(context_name, pattern)
+        zap.spider.exclude_from_scan(pattern)
+        zap.ascan.exclude_from_scan(pattern)
+
+    # Optional form-based authentication.
+    user_id: Optional[str] = None
+    if login_url and login_username and login_password:
+        print(f"[+] Configuring form-based authentication via {login_url}...")
+        if login_url.startswith("http://") or login_url.startswith("https://"):
+            login_full = login_url
+        else:
+            login_full = target.rstrip("/") + "/" + login_url.lstrip("/")
+
+        auth_method = "formBasedAuthentication"
+        login_request_data = "username={%username%}&password={%password%}"
+        auth_params = (
+            f"loginUrl={login_full}&loginRequestData={login_request_data}"
+        )
+        zap.authentication.set_authentication_method(
+            context_id, auth_method, auth_params
+        )
+        # Treat any occurrence of "logout" in the response body as a heuristic
+        # logged-out indicator; this is simplistic but useful for demos.
+        zap.authentication.set_logged_in_indicator(
+            context_id, "Logout|logout"
+        )
+
+        # Create a user within this context.
+        user_id = zap.users.new_user(context_id, "ca2-user")
+        zap.users.set_credentials(
+            context_id,
+            user_id,
+            f"username={login_username}&password={login_password}",
+        )
+        zap.users.set_user_enabled(context_id, user_id, "true")
+        zap.forcedUser.set_forced_user(context_id, user_id)
+        zap.forcedUser.set_forced_user_mode_enabled("true")
+        print(f"[+] Authentication configured for user id {user_id}.")
+
     print(f"[+] Accessing target: {target}")
     zap.urlopen(target)
 
     print("[+] Starting spider...")
-    scan_id = zap.spider.scan(target)
+    if user_id is not None:
+        scan_id = zap.spider.scan_as_user(context_id, user_id, target)
+    else:
+        scan_id = zap.spider.scan(target)
     while int(zap.spider.status(scan_id)) < 100:
         print(f"  - Spider progress: {zap.spider.status(scan_id)}%")
         time.sleep(2)
 
     print("[+] Starting active scan...")
-    active_id = zap.ascan.scan(target)
+    if user_id is not None:
+        active_id = zap.ascan.scan_as_user(context_id, user_id, target)
+    else:
+        active_id = zap.ascan.scan(target)
     while int(zap.ascan.status(active_id)) < 100:
         print(f"  - Active scan progress: {zap.ascan.status(active_id)}%")
         time.sleep(2)
@@ -107,12 +209,70 @@ def run_dast(
     alerts = zap.core.alerts()
     print(f"[+] Scan complete. Total alerts: {len(alerts)}")
 
-    result: Dict[str, Any] = {"target": target, "alerts": alerts}
+    # Basic severity summary.
+    severities: Dict[str, int] = {"High": 0, "Medium": 0, "Low": 0, "Informational": 0}
+    for alert in alerts:
+        risk = alert.get("risk", "Informational")
+        if risk in severities:
+            severities[risk] += 1
+        else:
+            severities["Informational"] += 1
 
+    result: Dict[str, Any] = {
+        "target": target,
+        "context_id": context_id,
+        "user_id": user_id,
+        "alerts": alerts,
+        "severity_summary": severities,
+    }
+
+    # Handle JSON output via legacy --output-json first.
     if output_json is not None:
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(json.dumps(result, indent=2))
         print(f"[+] JSON DAST report written to {output_json}")
+
+    # Additional formats driven by --formats/--output-prefix.
+    formats = formats or []
+    if output_base is not None and formats:
+        output_base.parent.mkdir(parents=True, exist_ok=True)
+        base = output_base
+
+        if "json" in formats and output_json is None:
+            json_path = base.with_suffix(".json")
+            json_path.write_text(json.dumps(result, indent=2))
+            print(f"[+] JSON DAST report written to {json_path}")
+
+        if "html" in formats:
+            html_report = zap.core.htmlreport()
+            html_path = base.with_suffix(".html")
+            html_path.write_text(html_report)
+            print(f"[+] HTML report written to {html_path}")
+
+        if "xml" in formats:
+            xml_report = zap.core.xmlreport()
+            xml_path = base.with_suffix(".xml")
+            xml_path.write_text(xml_report)
+            print(f"[+] XML report written to {xml_path}")
+
+        if "md" in formats:
+            md_lines: List[str] = [
+                f"# ZAP DAST Summary for {target}",
+                "",
+                "## Severity counts",
+            ]
+            for sev, count in severities.items():
+                md_lines.append(f"- **{sev}**: {count}")
+            md_lines.append("")
+            md_lines.append("## Alerts (top-level summary)")
+            for alert in alerts:
+                md_lines.append(
+                    f"- **{alert.get('risk')}** {alert.get('alert')} "
+                    f"on {alert.get('url')}"
+                )
+            md_path = base.with_suffix(".md")
+            md_path.write_text("\n".join(md_lines))
+            print(f"[+] Markdown summary written to {md_path}")
 
     return result
 
@@ -162,12 +322,76 @@ def parse_args() -> argparse.Namespace:
         default="zap-ca2",
         help="Docker container name to use when --auto-docker is enabled.",
     )
+    parser.add_argument(
+        "--login-url",
+        default=None,
+        help=(
+            "Optional login URL or path for form-based authentication, "
+            "e.g. /accounts/login/."
+        ),
+    )
+    parser.add_argument(
+        "--login-username",
+        default=None,
+        help="Username to use for ZAP form-based authentication.",
+    )
+    parser.add_argument(
+        "--login-password",
+        default=None,
+        help="Password to use for ZAP form-based authentication.",
+    )
+    parser.add_argument(
+        "--include",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional regex patterns to include in the ZAP context. "
+            "By default the target URL is included."
+        ),
+    )
+    parser.add_argument(
+        "--exclude",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional regex patterns to exclude from the ZAP context and "
+            "from spider/active scans (e.g. '/static/.*' '/admin/.*')."
+        ),
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS verification when performing pre-checks.",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        default=None,
+        help=(
+            "Optional base path (without extension) for multi-format reports "
+            "such as JSON/HTML/XML/Markdown."
+        ),
+    )
+    parser.add_argument(
+        "--formats",
+        default="json",
+        help=(
+            "Comma-separated list of additional report formats to write when "
+            "used with --output-prefix. Supported: json,html,xml,md. "
+            "Default: json."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output_json = Path(args.output_json) if args.output_json else None
+    formats = [f.strip().lower() for f in args.formats.split(",") if f.strip()]
+    output_base = Path(args.output_prefix) if args.output_prefix else None
+
+    # Quick availability check for the target before we start ZAP work.
+    if not check_target_available(args.target, insecure=args.insecure):
+        return
 
     # Check if ZAP is already reachable; if not, either offer auto-Docker or
     # ask the user to start it manually.
@@ -212,7 +436,20 @@ def main() -> None:
                 return
 
     try:
-        run_dast(args.target, args.api_key, args.zap_host, args.zap_port, output_json)
+        run_dast(
+            target=args.target,
+            api_key=args.api_key,
+            zap_host=args.zap_host,
+            zap_port=args.zap_port,
+            output_json=output_json,
+            output_base=output_base,
+            formats=formats,
+            login_url=args.login_url,
+            login_username=args.login_username,
+            login_password=args.login_password,
+            include=args.include,
+            exclude=args.exclude,
+        )
     finally:
         # If we started Docker automatically, clean it up.
         if args.auto_docker:
