@@ -178,6 +178,28 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
   cd ..
   ```
 
+  For a quick CA2 run with standardised filenames and a text summary log, you
+  can also use the automatic mode from the **project root**:
+
+  ```bash
+  python task2_scripts/sast_bandit.py \
+    --auto \
+    --mode insecure
+
+  python task2_scripts/sast_bandit.py \
+    --auto \
+    --mode secure
+  ```
+
+  These commands will write:
+
+  - JSON: `logs/json_logs/bandit_<mode>_<ddmmyy>.json`
+  - Text log: `logs/bandit_<mode>_<ddmmyy>.log`
+
+  For CI-style gating you can also add `--fail-on-high` or `--fail-on-medium`
+  to have the command exit non-zero if Bandit reports issues of those
+  severities.
+
 - **DAST (OWASP ZAP)** – via `dast_zap.py`, with Docker automation and auth support:
 
   - **Basic scan using an existing ZAP daemon**:
