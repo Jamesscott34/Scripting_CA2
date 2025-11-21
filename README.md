@@ -191,14 +191,31 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
     --mode secure
   ```
 
-  These commands will write:
+  In both cases, if you do not override `--mode` it defaults to **insecure**.
 
-  - JSON: `logs/json_logs/bandit_<mode>_<ddmmyy>.json`
-  - Text log: `logs/bandit_<mode>_<ddmmyy>.log`
+  With automatic naming, the files are named based on the target being
+  scanned, so running against:
+
+  - `../ca2_secure_website` will produce:
+    - JSON: `logs/json_logs/ca2_secure_website_bandit_<ddmmyy>.json`
+    - Log: `logs/ca2_secure_website_bandit_<ddmmyy>.log`
+    - Excel: `logs/excel/ca2_secure_website_bandit_<ddmmyy>.xlsx`
 
   For CI-style gating you can also add `--fail-on-high` or `--fail-on-medium`
   to have the command exit non-zero if Bandit reports issues of those
   severities.
+
+  To see Bandit findings on a small, intentionally insecure sample file you
+  can also run:
+
+  ```bash
+  python task2_scripts/sast_bandit.py \
+    --path task2_scripts/bandit_demo_target.py \
+    --auto
+  ```
+
+  This is useful when demonstrating SAST behaviour against "any Python code",
+  not just the Django project.
 
 - **DAST (OWASP ZAP)** – via `dast_zap.py`, with Docker automation and auth support:
 

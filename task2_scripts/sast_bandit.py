@@ -26,6 +26,7 @@ def run_bandit(
     target_path: Path,
     output_json: Path | None = None,
     log_path: Optional[Path] = None,
+    excel_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     cmd = [
         "bandit",
@@ -67,6 +68,45 @@ def run_bandit(
             f"Total issues: {len(results)} (HIGH={high}, MEDIUM={medium}, LOW={low})\n"
         )
         print(f"[+] Text summary log written to {log_path}")
+
+    if excel_path is not None:
+        try:
+            from openpyxl import Workbook  # type: ignore
+
+            excel_path.parent.mkdir(parents=True, exist_ok=True)
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "issues"
+            ws.append(
+                [
+                    "severity",
+                    "confidence",
+                    "filename",
+                    "line_number",
+                    "test_id",
+                    "test_name",
+                    "issue_text",
+                ]
+            )
+            for r in data.get("results", []):
+                ws.append(
+                    [
+                        r.get("issue_severity"),
+                        r.get("issue_confidence"),
+                        r.get("filename"),
+                        r.get("line_number"),
+                        r.get("test_id"),
+                        r.get("test_name"),
+                        r.get("issue_text"),
+                    ]
+                )
+            wb.save(excel_path)
+            print(f"[+] Excel report written to {excel_path}")
+        except ImportError:
+            print(
+                "[!] openpyxl is not installed; skipping Bandit Excel export. "
+                "Install it with 'pip install openpyxl' to enable Excel output."
+            )
 
     return data
 
@@ -140,16 +180,29 @@ def main() -> None:
     target = Path(args.path).resolve()
     output = Path(args.output_json).resolve()
 
-    # In auto mode, if the caller didn't override the default output filename,
-    # place JSON and logs under logs/ with a bandit_<mode>_<ddmmyy> pattern.
-    log_path: Optional[Path] = None
-    if args.auto and args.output_json == "bandit_report.json":
-        date_str = datetime.now().strftime("%d%m%y")
-        json_dir = Path("logs") / "json_logs"
-        output = json_dir / f"bandit_{args.mode}_{date_str}.json"
-        log_path = Path("logs") / f"bandit_{args.mode}_{date_str}.log"
+    # Decide whether to use the automatic naming scheme. This applies when
+    # --auto is set *or* when the caller leaves --output-json at its default
+    # value, so that we avoid littering the project root with bandit_report.json.
+    use_auto_naming = args.auto or args.output_json == "bandit_report.json"
 
-    report = run_bandit(target, output, log_path=log_path)
+    log_path: Optional[Path] = None
+    excel_path: Optional[Path] = None
+    if use_auto_naming:
+        date_str = datetime.now().strftime("%d%m%y")
+        # Use the last path component (without extension for files) as the
+        # base name, so paths like task2_scripts/bandit_demo_target.py become
+        # bandit_demo_target_bandit_<ddmmyy>.*
+        if target.is_file():
+            base_name = target.stem
+        else:
+            base_name = target.name
+
+        json_dir = Path("logs") / "json_logs"
+        output = json_dir / f"{base_name}_bandit_{date_str}.json"
+        log_path = Path("logs") / f"{base_name}_bandit_{date_str}.log"
+        excel_path = Path("logs") / "excel" / f"{base_name}_bandit_{date_str}.xlsx"
+
+    report = run_bandit(target, output, log_path=log_path, excel_path=excel_path)
 
     # Teaching-only behaviour: in "secure" mode we filter out intentional demo
     # findings (e.g. hardcoded demo passwords and insecure SQL branch) so that
