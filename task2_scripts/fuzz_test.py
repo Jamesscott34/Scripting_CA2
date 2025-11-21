@@ -35,6 +35,18 @@ import requests
 # Path to JSON file defining structured payload categories.
 PAYLOAD_LIBRARY_PATH = Path(__file__).with_name("payloads.json")
 
+# Default endpoints to fuzz when running in full automatic mode. These are
+# chosen to work well with the CA2 banking application but are also sensible
+# guesses for many generic web applications.
+AUTO_PATHS = [
+    "/",                 # landing page / dashboard
+    "/accounts/login/",  # Django auth login
+    "/login/",           # common custom login path
+    "/profile/",         # user profile
+    "/dashboard/",       # overview/dashboard
+    "/search/",          # search endpoint
+]
+
 
 def load_payload_library() -> Dict[str, List[str]]:
     """
@@ -255,10 +267,14 @@ def fuzz_endpoint(
     session: Optional[requests.Session] = None,
 ) -> None:
     """
-    Send randomised GET requests to the given endpoint and print basic stats.
+    Send fuzzed HTTP requests to the given endpoint and print basic stats.
 
-    This is deliberately simple and safe; it is *not* a full fuzzing framework
-    but demonstrates the idea of unexpected input testing.
+    This helper supports:
+    - Multiple HTTP methods (GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD).
+    - Query-string, JSON body, and form body fuzzing.
+    - Optional multipart file upload fuzzing.
+    - Optional structured payload categories and mutation.
+    - Optional reuse of an authenticated ``requests.Session``.
     """
     url = base_url.rstrip("/") + "/" + path.lstrip("/")
     method = method.upper()
@@ -368,6 +384,10 @@ def fuzz_endpoint(
     parsed = urlparse(base_url)
     host = parsed.netloc or parsed.path or "unknown"
     safe_host = host.replace(":", "_").replace(".", "_")
+    # Incorporate the endpoint path into filenames so that different endpoints
+    # fuzzed on the same host do not overwrite one another.
+    safe_path = path.strip("/") or "root"
+    safe_path = safe_path.replace("/", "_").replace(" ", "_")
     date_str = datetime.now().strftime("%d%m%y")
     mode_suffix = "" if payload_mode == "random" else f"_{payload_mode}"
     category_suffix = "" if not payload_category else f"_{payload_category}"
@@ -375,7 +395,7 @@ def fuzz_endpoint(
     # Always ensure a logs directory for human-readable logs.
     logs_dir = Path("logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / f"fuzz_{safe_host}_{date_str}{mode_suffix}{category_suffix}.log"
+    log_path = logs_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.log"
 
     # If no JSON directory was provided, default to logs/json_logs.
     if output_json is None:
@@ -389,7 +409,7 @@ def fuzz_endpoint(
             output_dir = output_json
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path = output_dir / f"fuzz_{safe_host}_{date_str}{mode_suffix}{category_suffix}.json"
+    json_path = output_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.json"
 
     data = {
         "mode": os.getenv("SECURE_MODE", "unknown"),
@@ -432,6 +452,15 @@ def parse_args() -> argparse.Namespace:
         help="Base URL of the running Django app (default: http://localhost:8000)",
     )
     parser.add_argument(
+        "--target",
+        default=None,
+        help=(
+            "Optional convenience alias for --base-url. If provided, this "
+            "value overrides --base-url and is used as the fuzz target "
+            "(e.g. http://127.0.0.1:8001 or https://example.com)."
+        ),
+    )
+    parser.add_argument(
         "--path",
         default="/search/",
         help="Endpoint path to fuzz (default: /search/).",
@@ -466,6 +495,14 @@ def parse_args() -> argparse.Namespace:
             "Payload mode: 'random' sends varied short/medium inputs; "
             "'buffer_overflow' sends very large payloads to test robustness; "
             "'auto' runs both modes one after the other."
+        ),
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help=(
+            "Full automatic mode: enables mode=auto, all payload categories, "
+            "payload mutation, and file upload fuzzing for the chosen path."
         ),
     )
     parser.add_argument(
@@ -548,6 +585,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # --target is a user-friendly alias for --base-url.
+    if args.target:
+        args.base_url = args.target
+
+    # Full automatic mode turns on a rich combination of features suitable for
+    # demonstrations: both payload modes, all categories, mutation, and file
+    # uploads.
+    if args.auto:
+        args.mode = "auto"
+        args.all_categories = True
+        args.mutate_payloads = True
+        args.fuzz_files = True
+        print(
+            "[*] Full auto mode enabled: mode=auto, all payload categories, "
+            "payload mutation, and file upload fuzzing."
+        )
+
     output_json = Path(args.output_json) if args.output_json else None
     session = build_authenticated_session(
         base_url=args.base_url,
@@ -570,64 +624,72 @@ def main() -> None:
     else:
         categories = [args.payload_category]
 
-    for category in categories:
-        if category:
-            print(f"[*] Using payload category: {category}")
+    # Decide which endpoint paths to run.
+    if args.auto:
+        paths = AUTO_PATHS
+    else:
+        paths = [args.path]
 
-        # In auto mode we run *both* random and buffer_overflow fuzzing.
-        if args.mode == "auto":
-            output_dir = output_json
-            print("[*] Auto mode: running random fuzzing first...")
-            fuzz_endpoint(
-                args.base_url,
-                args.path,
-                args.iterations,
-                output_json=output_dir,
-                payload_mode="random",
-                method=args.method,
-                body_type=args.body_type,
-                insecure=args.insecure,
-                timeout=args.timeout,
-                retries=args.retries,
-                payload_category=category,
-                mutate=args.mutate_payloads,
-                fuzz_files=args.fuzz_files,
-                session=session,
-            )
-            print("[*] Auto mode: running buffer_overflow fuzzing...")
-            fuzz_endpoint(
-                args.base_url,
-                args.path,
-                args.iterations,
-                output_json=output_dir,
-                payload_mode="buffer_overflow",
-                method=args.method,
-                body_type=args.body_type,
-                insecure=args.insecure,
-                timeout=args.timeout,
-                retries=args.retries,
-                payload_category=category,
-                mutate=args.mutate_payloads,
-                fuzz_files=args.fuzz_files,
-                session=session,
-            )
-        else:
-            fuzz_endpoint(
-                args.base_url,
-                args.path,
-                args.iterations,
-                output_json=output_json,
-                payload_mode=args.mode,
-                method=args.method,
-                body_type=args.body_type,
-                insecure=args.insecure,
-                timeout=args.timeout,
-                retries=args.retries,
-                payload_category=category,
-                mutate=args.mutate_payloads,
-                fuzz_files=args.fuzz_files,
-                session=session,
-            )
+    for path in paths:
+        print(f"[*] Fuzzing path: {path}")
+        for category in categories:
+            if category:
+                print(f"[*] Using payload category: {category}")
+
+            # In auto mode we run *both* random and buffer_overflow fuzzing.
+            if args.mode == "auto":
+                output_dir = output_json
+                print("[*] Auto mode: running random fuzzing first...")
+                fuzz_endpoint(
+                    args.base_url,
+                    path,
+                    args.iterations,
+                    output_json=output_dir,
+                    payload_mode="random",
+                    method=args.method,
+                    body_type=args.body_type,
+                    insecure=args.insecure,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    payload_category=category,
+                    mutate=args.mutate_payloads,
+                    fuzz_files=args.fuzz_files,
+                    session=session,
+                )
+                print("[*] Auto mode: running buffer_overflow fuzzing...")
+                fuzz_endpoint(
+                    args.base_url,
+                    path,
+                    args.iterations,
+                    output_json=output_dir,
+                    payload_mode="buffer_overflow",
+                    method=args.method,
+                    body_type=args.body_type,
+                    insecure=args.insecure,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    payload_category=category,
+                    mutate=args.mutate_payloads,
+                    fuzz_files=args.fuzz_files,
+                    session=session,
+                )
+            else:
+                fuzz_endpoint(
+                    args.base_url,
+                    path,
+                    args.iterations,
+                    output_json=output_json,
+                    payload_mode=args.mode,
+                    method=args.method,
+                    body_type=args.body_type,
+                    insecure=args.insecure,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    payload_category=category,
+                    mutate=args.mutate_payloads,
+                    fuzz_files=args.fuzz_files,
+                    session=session,
+                )
 
 
 if __name__ == "__main__":
