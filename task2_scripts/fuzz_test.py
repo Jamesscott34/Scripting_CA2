@@ -7,6 +7,8 @@ This script is intentionally simple but demonstrates several important ideas:
   endpoints to see how they behave under stress.
 - Supporting multiple HTTP methods (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS).
 - Fuzzing both **query parameters** and **request bodies** (JSON or form).
+- Using structured **payload categories** (SQLi, XSS, path traversal, Unicode,
+  Django template injections) loaded from a JSON library file.
 - Recording every request/response pair in a JSON file for later analysis or
   inclusion in a security report.
 - A "buffer_overflow" style mode that generates *very* long payloads to test
@@ -27,6 +29,36 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
+
+# Path to JSON file defining structured payload categories.
+PAYLOAD_LIBRARY_PATH = Path(__file__).with_name("payloads.json")
+
+
+def load_payload_library() -> Dict[str, List[str]]:
+    """
+    Load structured payload categories from a JSON file.
+
+    The JSON file maps category names (e.g. "sql", "xss", "django") to lists of
+    payload strings. This makes it easy to extend the fuzzer without changing
+    any Python code.
+    """
+    if not PAYLOAD_LIBRARY_PATH.exists():
+        return {}
+
+    try:
+        with PAYLOAD_LIBRARY_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        # Fail closed: if the file is unreadable or invalid, just return an
+        # empty mapping and fall back to purely random payload generation.
+        return {}
+
+    # Normalise all values to lists of strings.
+    library: Dict[str, List[str]] = {}
+    for name, values in data.items():
+        if isinstance(values, list):
+            library[name] = [str(v) for v in values]
+    return library
 
 
 def random_string(min_len: int = 1, max_len: int = 50) -> str:
@@ -67,6 +99,45 @@ def build_bodies(payload: str, body_type: str) -> Tuple[Optional[Dict[str, str]]
     return None, None
 
 
+def mutate_payload(payload: str) -> str:
+    """
+    Apply a simple mutation to a payload string.
+
+    The goal is not to be exhaustive like AFL, but to introduce small,
+    repeatable distortions that may trigger edge cases in parsers and
+    validation logic.
+    """
+    if not payload:
+        return payload
+
+    choice = random.choice(
+        ["invert_case", "duplicate", "delete", "insert_special", "reverse"]
+    )
+
+    if choice == "invert_case":
+        return "".join(
+            c.lower() if c.isupper() else c.upper() if c.islower() else c
+            for c in payload
+        )
+
+    if choice == "duplicate":
+        idx = random.randrange(len(payload))
+        return payload[:idx] + payload[idx] * 2 + payload[idx + 1 :]
+
+    if choice == "delete" and len(payload) > 1:
+        idx = random.randrange(len(payload))
+        return payload[:idx] + payload[idx + 1 :]
+
+    if choice == "insert_special":
+        specials = "!@#$%^&*()[]{}<>?/\\|"
+        idx = random.randrange(len(payload) + 1)
+        ch = random.choice(specials)
+        return payload[:idx] + ch + payload[idx:]
+
+    # "reverse" or fallback
+    return payload[::-1]
+
+
 def fuzz_endpoint(
     base_url: str,
     path: str,
@@ -78,6 +149,8 @@ def fuzz_endpoint(
     insecure: bool = False,
     timeout: float = 5.0,
     retries: int = 1,
+    payload_category: Optional[str] = None,
+    mutate: bool = False,
 ) -> None:
     """
     Send randomised GET requests to the given endpoint and print basic stats.
@@ -93,18 +166,41 @@ def fuzz_endpoint(
     status_codes: List[int] = []
     samples = []
 
+    payload_library: Dict[str, List[str]] = {}
+    if payload_category:
+        payload_library = load_payload_library()
+        if payload_category not in payload_library:
+            print(
+                f"[!] Payload category '{payload_category}' was not found in "
+                f"{PAYLOAD_LIBRARY_PATH}. Falling back to random strings."
+            )
+            payload_category = None
+
     for i in range(1, iterations + 1):
-        # In "buffer_overflow" mode we deliberately generate a very large
-        # payload (e.g. 50k characters) to test how the endpoint handles
-        # large inputs. This is safe at the Python level but can reveal
-        # size-related issues in downstream components.
-        if payload_mode == "buffer_overflow":
-            params = {"q": random_string(10_000, 50_000)}
+        # Choose a base payload, optionally from a structured category.
+        if payload_category and payload_library:
+            base = random.choice(payload_library[payload_category])
+            if payload_mode == "buffer_overflow":
+                # Amplify the category payload into a very large string.
+                repeat = max(1, 10_000 // max(1, len(base)))
+                base = base * repeat
         else:
-            params = {"q": random_string(0, 80)}
+            # In "buffer_overflow" mode we deliberately generate a very large
+            # payload (e.g. 50k characters) to test how the endpoint handles
+            # large inputs. This is safe at the Python level but can reveal
+            # size-related issues in downstream components.
+            if payload_mode == "buffer_overflow":
+                base = random_string(10_000, 50_000)
+            else:
+                base = random_string(0, 80)
+
+        if mutate:
+            base = mutate_payload(base)
+
+        params = {"q": base}
 
         json_body, form_body = build_bodies(
-            payload=params["q"],
+            payload=base,
             body_type=body_type,
         )
 
@@ -162,11 +258,12 @@ def fuzz_endpoint(
     safe_host = host.replace(":", "_").replace(".", "_")
     date_str = datetime.now().strftime("%d%m%y")
     mode_suffix = "" if payload_mode == "random" else f"_{payload_mode}"
+    category_suffix = "" if not payload_category else f"_{payload_category}"
 
     # Always ensure a logs directory for human-readable logs.
     logs_dir = Path("logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / f"fuzz_{safe_host}_{date_str}{mode_suffix}.log"
+    log_path = logs_dir / f"fuzz_{safe_host}_{date_str}{mode_suffix}{category_suffix}.log"
 
     # If no JSON directory was provided, default to logs/json_logs.
     if output_json is None:
@@ -180,15 +277,17 @@ def fuzz_endpoint(
             output_dir = output_json
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path = output_dir / f"fuzz_{safe_host}_{date_str}{mode_suffix}.json"
+    json_path = output_dir / f"fuzz_{safe_host}_{date_str}{mode_suffix}{category_suffix}.json"
 
     data = {
         "mode": os.getenv("SECURE_MODE", "unknown"),
         "base_url": base_url,
         "path": path,
-        "iterations": iterations,
-        "payload_mode": payload_mode,
-        "samples": samples,
+      "iterations": iterations,
+      "payload_mode": payload_mode,
+      "payload_category": payload_category,
+      "mutate_payloads": mutate,
+      "samples": samples,
     }
     json_path.write_text(json.dumps(data, indent=2))
     print(f"[+] JSON fuzz report written to {json_path}")
@@ -258,6 +357,31 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--payload-category",
+        default=None,
+        choices=["sql", "xss", "path", "unicode", "django"],
+        help=(
+            "Optional payload category to use instead of purely random fuzz "
+            "strings. Categories are loaded from payloads.json."
+        ),
+    )
+    parser.add_argument(
+        "--all-categories",
+        action="store_true",
+        help=(
+            "Run fuzzing once per known payload category. Each category will "
+            "produce its own log and JSON report."
+        ),
+    )
+    parser.add_argument(
+        "--mutate-payloads",
+        action="store_true",
+        help=(
+            "Apply a simple mutation engine to each payload (invert case, "
+            "insert special characters, duplicate/delete characters, etc.)."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         default=None,
         help="Optional path to write a JSON report of fuzzed queries and status codes.",
@@ -285,48 +409,71 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     output_json = Path(args.output_json) if args.output_json else None
-    # In auto mode we run *both* random and buffer_overflow fuzzing.
-    if args.mode == "auto":
-        output_dir = output_json
-        print("[*] Auto mode: running random fuzzing first...")
-        fuzz_endpoint(
-            args.base_url,
-            args.path,
-            args.iterations,
-            output_json=output_dir,
-            payload_mode="random",
-            method=args.method,
-            body_type=args.body_type,
-            insecure=args.insecure,
-            timeout=args.timeout,
-            retries=args.retries,
-        )
-        print("[*] Auto mode: running buffer_overflow fuzzing...")
-        fuzz_endpoint(
-            args.base_url,
-            args.path,
-            args.iterations,
-            output_json=output_dir,
-            payload_mode="buffer_overflow",
-            method=args.method,
-            body_type=args.body_type,
-            insecure=args.insecure,
-            timeout=args.timeout,
-            retries=args.retries,
-        )
+    # Decide which payload categories to run.
+    if args.all_categories:
+        library = load_payload_library()
+        categories: List[Optional[str]] = sorted(library.keys())
+        if not categories:
+            print(
+                "[!] No payload categories found in payloads.json; "
+                "falling back to purely random payloads."
+            )
+            categories = [None]
     else:
-        fuzz_endpoint(
-            args.base_url,
-            args.path,
-            args.iterations,
-            output_json=output_json,
-            payload_mode=args.mode,
-            method=args.method,
-            body_type=args.body_type,
-            insecure=args.insecure,
-            timeout=args.timeout,
-            retries=args.retries,
-        )
+        categories = [args.payload_category]
+
+    for category in categories:
+        if category:
+            print(f"[*] Using payload category: {category}")
+
+        # In auto mode we run *both* random and buffer_overflow fuzzing.
+        if args.mode == "auto":
+            output_dir = output_json
+            print("[*] Auto mode: running random fuzzing first...")
+            fuzz_endpoint(
+                args.base_url,
+                args.path,
+                args.iterations,
+                output_json=output_dir,
+                payload_mode="random",
+                method=args.method,
+                body_type=args.body_type,
+                insecure=args.insecure,
+                timeout=args.timeout,
+                retries=args.retries,
+                payload_category=category,
+                mutate=args.mutate_payloads,
+            )
+            print("[*] Auto mode: running buffer_overflow fuzzing...")
+            fuzz_endpoint(
+                args.base_url,
+                args.path,
+                args.iterations,
+                output_json=output_dir,
+                payload_mode="buffer_overflow",
+                method=args.method,
+                body_type=args.body_type,
+                insecure=args.insecure,
+                timeout=args.timeout,
+                retries=args.retries,
+                payload_category=category,
+                mutate=args.mutate_payloads,
+            )
+        else:
+            fuzz_endpoint(
+                args.base_url,
+                args.path,
+                args.iterations,
+                output_json=output_json,
+                payload_mode=args.mode,
+                method=args.method,
+                body_type=args.body_type,
+                insecure=args.insecure,
+                timeout=args.timeout,
+                retries=args.retries,
+                payload_category=category,
+                mutate=args.mutate_payloads,
+            )
 
 
 if __name__ == "__main__":
