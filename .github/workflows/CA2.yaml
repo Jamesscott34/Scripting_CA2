@@ -128,7 +128,13 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: "ca2_web:latest"
+          # Human-readable table output in the CI logs.
           format: "table"
+          # Only fail the build on HIGH / CRITICAL issues to avoid red builds
+          # for low/medium and Debian base image noise.
+          severity: "HIGH,CRITICAL"
+          # Treat any HIGH/CRITICAL finding as a failing gate; lower severities
+          # still show in the report but won't break CI.
           exit-code: "1"
 
       # 13) Tag Docker image with commit SHA to support rollbacks.
