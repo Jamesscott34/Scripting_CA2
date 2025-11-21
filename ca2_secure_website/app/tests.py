@@ -173,12 +173,29 @@ class Task2ScriptsLogTests(TestCase):
     """
 
     def _project_root(self) -> Path:
-        """Return the repository root directory.
+        """Return the repository or app root directory.
 
-        `tests.py` lives in `ca2_secure_website/app/`, so the project root is
-        two levels up from this file.
+        Locally, `tests.py` lives in `ca2_secure_website/app/` and the repo
+        root (which contains `task2_scripts/`) is two levels up.
+
+        Inside the Docker image, the Django project is copied to `/app` and
+        this file lives at `/app/app/tests.py`, so the logical "project root"
+        is one level up (the directory that contains `manage.py`).
         """
-        return Path(__file__).resolve().parents[2]
+        here = Path(__file__).resolve()
+
+        # Local repo layout: .../Scripting/ca2_secure_website/app/tests.py
+        repo_root = here.parents[2]
+        if (repo_root / "task2_scripts").exists():
+            return repo_root
+
+        # Docker layout: /app/app/tests.py → project root is /app.
+        app_root = here.parents[1]
+        if (app_root / "manage.py").exists():
+            return app_root
+
+        # Fallback to the original assumption if neither heuristic matches.
+        return repo_root
 
     def _logs_dir(self) -> Path:
         """Ensure and return the folder used for human-readable log files."""
@@ -231,6 +248,14 @@ class Task2ScriptsLogTests(TestCase):
         """
 
         root = self._project_root()
+
+        # If the Task 2 scripts are not present in this environment (for
+        # example inside the Docker image where only the Django project is
+        # copied), skip this integration test rather than failing.
+        fuzz_path = root / "task2_scripts" / "fuzz_test.py"
+        bandit_path = root / "task2_scripts" / "sast_bandit.py"
+        if not (fuzz_path.exists() and bandit_path.exists()):
+            self.skipTest("Task 2 scripts not available in this environment.")
 
         # Allow limiting to a single mode via environment:
         # - Primary: SECURE_MODE (so running `SECURE_MODE=secure python manage.py test`
