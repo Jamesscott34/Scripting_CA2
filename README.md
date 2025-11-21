@@ -41,21 +41,79 @@ Default demo logins:
 
 From the **project root** (with the app running on `http://127.0.0.1:8001`):
 
-- **Fuzz testing** (with JSON output of all search queries used):
+- **Fuzz testing (advanced, HTTP + JSON/form + files)**:
 
-  ```bash
-  python task2_scripts/fuzz_test.py \
-    --base-url http://127.0.0.1:8001 \
-    --path /search/ \
-    --iterations 50 \
-    --output-json task2_scripts/report_samples/fuzz_results_manual.json
-  ```
+  - **Full‑auto multi-endpoint fuzzing** against a target URL/IP:
 
-- **SAST (Bandit)** – writes JSON reports to `task2_scripts/bandit_report_*.json`:
+    ```bash
+    # Quick CA2 demo: fuzz common endpoints with all categories + modes
+    python task2_scripts/fuzz_test.py \
+      -t http://127.0.0.1:8001 \
+      --auto
+    ```
+
+    This will:
+    - Fuzz `/, /accounts/login/, /login/, /profile/, /dashboard/, /search/`.
+    - Use all payload categories (`sql`, `xss`, `path`, `unicode`, `django`).
+    - Run both `random` and `buffer_overflow` payload modes.
+    - Mutate payloads and attach fuzzed file uploads.
+    - Produce **one combined report set**:
+      - JSON: `logs/json_logs/fuzz_all_<host>_<ddmmyy>.json`
+      - Text log: `logs/fuzz_all_<host>_<ddmmyy>.log`
+      - Excel (one sheet per run): `logs/excel/fuzz_all_<host>_<ddmmyy>.xlsx`
+
+    By default auto mode uses **20 iterations** per run; you can override:
+
+    ```bash
+    python task2_scripts/fuzz_test.py \
+      -t http://127.0.0.1:8001 \
+      --auto \
+      --iterations 50
+    ```
+
+  - **Targeted fuzz of a single endpoint** (keeps per‑run JSON/logs):
+
+    ```bash
+    python task2_scripts/fuzz_test.py \
+      --base-url http://127.0.0.1:8001 \
+      --path /search/ \
+      --mode auto \
+      --payload-category sql \
+      --iterations 50
+    ```
+
+    Outputs will be placed under `logs/` and `logs/json_logs/` with filenames
+    including the host, path and date.
+
+  - **Optional authenticated fuzzing** (Django-style login with CSRF):
+
+    ```bash
+    python task2_scripts/fuzz_test.py \
+      -t http://127.0.0.1:8001 \
+      --auto \
+      --login-url auto \
+      --login-username james \
+      --login-password UserDemo123!
+    ```
+
+    `--login-url auto` will try `/accounts/login/` and `/login/` in order,
+    establishing a session and then reusing it for all fuzz requests.
+
+- **SAST (Bandit)** – via `sast_bandit.py`, with secure/insecure modes:
 
   ```bash
   cd task2_scripts
-  python sast_bandit.py --path ../ca2_secure_website --output-json bandit_report_manual.json
+  # Insecure view of findings (real Bandit results)
+  python sast_bandit.py \
+    --path ../ca2_secure_website \
+    --mode insecure \
+    --output-json ../logs/json_logs/bandit_report_insecure.json
+
+  # "Secure" teaching mode – filters the JSON so the summary shows 0 issues
+  python sast_bandit.py \
+    --path ../ca2_secure_website \
+    --mode secure \
+    --output-json ../logs/json_logs/bandit_report_secure.json
   cd ..
   ```
 
@@ -67,8 +125,8 @@ From the **project root** (with the app running on `http://127.0.0.1:8001`):
   cd ..
   ```
 
-Sample / trimmed reports can be stored under `task2_scripts/report_samples/` for
-inclusion in your CA2 submission.
+All JSON reports and fuzz outputs are written under `logs/json_logs/` and can be
+referenced directly in your CA2 submission.
 
 ### Running tests (Task 1 + Task 2 integration)
 

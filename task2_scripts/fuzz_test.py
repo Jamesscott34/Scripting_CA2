@@ -48,6 +48,42 @@ AUTO_PATHS = [
 ]
 
 
+def load_kv_json(path: Optional[str], label: str) -> Dict[str, str]:
+    """
+    Load a simple key/value mapping from a JSON file.
+
+    The file is expected to contain a JSON object, for example:
+
+    {
+      "X-API-Key": "static-or-<fuzz>",
+      "X-Trace-Id": "<fuzz>"
+    }
+
+    Any ``<fuzz>`` placeholder in the values will be replaced with the current
+    payload string at request time.
+    """
+    if not path:
+        return {}
+
+    p = Path(path)
+    if not p.exists():
+        print(f"[!] {label} file '{path}' does not exist; ignoring.")
+        return {}
+
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[!] Failed to load {label} file '{path}': {exc}; ignoring.")
+        return {}
+
+    if not isinstance(data, dict):
+        print(f"[!] {label} file '{path}' did not contain a JSON object; ignoring.")
+        return {}
+
+    return {str(k): str(v) for k, v in data.items()}
+
+
 def load_payload_library() -> Dict[str, List[str]]:
     """
     Load structured payload categories from a JSON file.
@@ -267,6 +303,8 @@ def fuzz_endpoint(
     session: Optional[requests.Session] = None,
     aggregate: Optional[List[Dict[str, object]]] = None,
     write_files: bool = True,
+    base_headers: Optional[Dict[str, str]] = None,
+    base_cookies: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     Send fuzzed HTTP requests to the given endpoint and print basic stats.
@@ -319,6 +357,18 @@ def fuzz_endpoint(
 
         params = {"q": base}
 
+        # Apply <fuzz> placeholder substitution for headers and cookies.
+        headers: Optional[Dict[str, str]] = None
+        cookies: Optional[Dict[str, str]] = None
+        if base_headers:
+            headers = {
+                name: value.replace("<fuzz>", base) for name, value in base_headers.items()
+            }
+        if base_cookies:
+            cookies = {
+                name: value.replace("<fuzz>", base) for name, value in base_cookies.items()
+            }
+
         json_body, form_body = build_bodies(
             payload=base,
             body_type=body_type,
@@ -341,6 +391,8 @@ def fuzz_endpoint(
                     json=effective_json,
                     data=form_body,
                     files=files,
+                    headers=headers,
+                    cookies=cookies,
                     timeout=timeout,
                     verify=verify,
                 )
@@ -352,6 +404,8 @@ def fuzz_endpoint(
                         "json": effective_json,
                         "data": form_body,
                         "has_file": bool(files),
+                        "has_headers": bool(headers),
+                        "has_cookies": bool(cookies),
                         "status_code": resp.status_code,
                     }
                 )
@@ -373,6 +427,8 @@ def fuzz_endpoint(
                     "json": effective_json,
                     "data": form_body,
                     "has_file": bool(files),
+                    "has_headers": bool(headers),
+                    "has_cookies": bool(cookies),
                     "status_code": None,
                     "error": str(last_exc),
                 }
@@ -561,6 +617,24 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to write a JSON report of fuzzed queries and status codes.",
     )
     parser.add_argument(
+        "--headers-file",
+        default=None,
+        help=(
+            "Optional JSON file containing base HTTP headers. Values may "
+            "include the placeholder '<fuzz>', which will be replaced with "
+            "the current payload string for each request."
+        ),
+    )
+    parser.add_argument(
+        "--cookies-file",
+        default=None,
+        help=(
+            "Optional JSON file containing base cookies. Values may include "
+            "the placeholder '<fuzz>', which will be replaced with the "
+            "current payload string for each request."
+        ),
+    )
+    parser.add_argument(
         "--insecure",
         action="store_true",
         help="Disable TLS certificate verification (like curl -k).",
@@ -622,6 +696,8 @@ def main() -> None:
         )
 
     output_json = Path(args.output_json) if args.output_json else None
+    base_headers = load_kv_json(args.headers_file, label="headers")
+    base_cookies = load_kv_json(args.cookies_file, label="cookies")
     # Optionally establish an authenticated session. When --login-url=auto is
     # used we try a small set of common login paths in order until one works.
     session: Optional[requests.Session] = None
@@ -699,6 +775,8 @@ def main() -> None:
                     session=session,
                     aggregate=aggregate_runs,
                     write_files=write_files,
+                    base_headers=base_headers,
+                    base_cookies=base_cookies,
                 )
                 print("[*] Auto mode: running buffer_overflow fuzzing...")
                 fuzz_endpoint(
@@ -718,6 +796,8 @@ def main() -> None:
                     session=session,
                     aggregate=aggregate_runs,
                     write_files=write_files,
+                    base_headers=base_headers,
+                    base_cookies=base_cookies,
                 )
             else:
                 fuzz_endpoint(
@@ -737,6 +817,8 @@ def main() -> None:
                     session=session,
                     aggregate=aggregate_runs,
                     write_files=write_files,
+                    base_headers=base_headers,
+                    base_cookies=base_cookies,
                 )
 
     # If we have collected aggregate data (full auto mode), emit combined JSON,
