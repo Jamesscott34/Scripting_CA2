@@ -34,7 +34,8 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'ca2_secure_website/requirements.txt') }}
+          # Only hash the root requirements.txt; the app-specific file was removed.
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -44,10 +45,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 5) Install Django application requirements and Bandit.
-      - name: Install Django app requirements
+      # 5) Install additional tooling (Bandit for SAST).
+      - name: Install Bandit
         run: |
-          pip install -r ca2_secure_website/requirements.txt
           pip install bandit
 
       # 6) Run dependency vulnerability scanners (pip-audit and Safety).
