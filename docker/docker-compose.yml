@@ -1,12 +1,8 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16-alpine
     container_name: ca2_db
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ca2_bank}
       POSTGRES_USER: ${POSTGRES_USER:-ca2_user}
@@ -28,8 +24,6 @@ services:
     image: ca2_web:latest
     container_name: ca2_web
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       SECURE_MODE: ${SECURE_MODE:-secure}
     depends_on:
