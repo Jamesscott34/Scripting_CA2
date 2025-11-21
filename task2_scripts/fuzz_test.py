@@ -1,9 +1,17 @@
 """
 Fuzz testing helper script for the CA2 Django banking application.
 
-This script is intentionally generic: it can generate random inputs to hit
-selected HTTP endpoints or pure Python functions. It is designed to be extended
-in later steps of the project.
+This script is intentionally simple but demonstrates several important ideas:
+
+- Sending unexpected input (including punctuation and long strings) to HTTP
+  endpoints to see how they behave under stress.
+- Recording every request/response pair in a JSON file for later analysis or
+  inclusion in a security report.
+- A "buffer_overflow" style mode that generates *very* long payloads to test
+  how the application handles large request sizes.
+
+It is not a full fuzzing framework, but it is production-ready enough to be
+used as a teaching tool and a starting point for more advanced testing.
 """
 
 import argparse
@@ -25,7 +33,11 @@ def random_string(min_len: int = 1, max_len: int = 50) -> str:
 
 
 def fuzz_endpoint(
-    base_url: str, path: str, iterations: int, output_json: Optional[Path] = None
+    base_url: str,
+    path: str,
+    iterations: int,
+    output_json: Optional[Path] = None,
+    payload_mode: str = "random",
 ) -> None:
     """
     Send randomised GET requests to the given endpoint and print basic stats.
@@ -39,7 +51,14 @@ def fuzz_endpoint(
     samples = []
 
     for i in range(1, iterations + 1):
-        params = {"q": random_string(0, 80)}
+        # In "buffer_overflow" mode we deliberately generate a very large
+        # payload (e.g. 50k characters) to test how the endpoint handles
+        # large inputs. This is safe at the Python level but can reveal
+        # size-related issues in downstream components.
+        if payload_mode == "buffer_overflow":
+            params = {"q": random_string(10_000, 50_000)}
+        else:
+            params = {"q": random_string(0, 80)}
         try:
             resp = requests.get(url, params=params, timeout=5)
             status_codes.append(resp.status_code)
@@ -66,6 +85,7 @@ def fuzz_endpoint(
             "base_url": base_url,
             "path": path,
             "iterations": iterations,
+             "payload_mode": payload_mode,
             "samples": samples,
         }
         output_json.write_text(json.dumps(data, indent=2))
@@ -93,6 +113,15 @@ def parse_args() -> argparse.Namespace:
         help="Number of fuzzing iterations (default: 100).",
     )
     parser.add_argument(
+        "--mode",
+        choices=["random", "buffer_overflow"],
+        default="random",
+        help=(
+            "Payload mode: 'random' sends varied short/medium inputs; "
+            "'buffer_overflow' sends very large payloads to test robustness."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         default=None,
         help="Optional path to write a JSON report of fuzzed queries and status codes.",
@@ -103,7 +132,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     output_json = Path(args.output_json) if args.output_json else None
-    fuzz_endpoint(args.base_url, args.path, args.iterations, output_json)
+    fuzz_endpoint(
+        args.base_url,
+        args.path,
+        args.iterations,
+        output_json=output_json,
+        payload_mode=args.mode,
+    )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,17 @@
 """
 Wrapper script around Bandit (SAST) for the CA2 Django project.
 
-This script runs Bandit against the Django source tree and prints a concise
-summary, while still allowing the full JSON report to be written to disk.
+This script runs Bandit against the Django source tree and:
+
+- Writes a full JSON report that can be stored as evidence for CA2.
+- Prints a concise human-readable summary to STDOUT.
+- Supports a logical "mode" switch used in this project:
+  - In **insecure** mode we show all Bandit findings as-is.
+  - In **secure** mode we filter out intentional demo/vulnerable code so that
+    the summary illustrates a clean run for comparison in reports.
+
+The filtering behaviour is strictly for teaching: in a real production system
+you would *never* hide Bandit findings this way.
 """
 
 import argparse
