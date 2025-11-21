@@ -26,6 +26,9 @@ services:
     restart: unless-stopped
     environment:
       SECURE_MODE: ${SECURE_MODE:-secure}
+      # Use the Docker service name for Postgres so Django connects correctly
+      # inside the Docker network instead of trying to reach localhost.
+      POSTGRES_HOST: db
     depends_on:
       - db
     ports:
