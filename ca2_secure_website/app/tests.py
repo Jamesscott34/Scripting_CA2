@@ -254,12 +254,7 @@ class Task2ScriptsLogTests(TestCase):
                 "--iterations",
                 "5",
                 "--output-json",
-                str(
-                    root
-                    / "logs"
-                    / "json_logs"
-                    / f"fuzz_results_{mode}.json"
-                ),
+                str(root / "logs" / "json_logs"),
             ]
             self._run_script(fuzz_cmd, f"fuzz_{mode}.log", mode)
 
