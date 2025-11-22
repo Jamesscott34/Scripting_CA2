@@ -246,6 +246,33 @@ def build_files(payload: str, enable_files: bool) -> Optional[Dict[str, Tuple[st
     return {"file": (filename, content.encode("utf-8", errors="ignore"), mime_type)}
 
 
+class _HelperCallable:
+    """
+    Simple callable wrapper that does not implement the function descriptor
+    protocol. This prevents Python from turning helpers into bound methods when
+    they are attached to a test class, while still allowing them to behave like
+    normal functions.
+    """
+
+    def __init__(self, func: Callable[..., Any]) -> None:
+        self._func = func
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - trivial
+        return self._func(*args, **kwargs)
+
+
+# Wrap core helpers so that assigning them as class attributes in tests does not
+# cause implicit ``self`` binding. Inside this module we continue to use them as
+# usual, and external callers (including the tests) see a normal callable.
+_load_payload_library_impl = load_payload_library
+_build_bodies_impl = build_bodies
+_build_files_impl = build_files
+
+load_payload_library = _HelperCallable(_load_payload_library_impl)
+build_bodies = _HelperCallable(_build_bodies_impl)
+build_files = _HelperCallable(_build_files_impl)
+
+
 def build_authenticated_session(
     base_url: str,
     login_url: Optional[str],

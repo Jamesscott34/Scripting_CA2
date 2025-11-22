@@ -66,6 +66,12 @@ jobs:
           pip install safety
           safety check --bare
 
+      # 6b) Generate a CycloneDX SBOM for Python dependencies.
+      - name: Generate SBOM (CycloneDX for pip)
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-py -j -o logs/sbom_python.json
+
       # 7) Run Django tests against a fresh SQLite database in SECURE mode.
       #    SECURE_MODE=secure enables all protections; TEST_MODE=secure ensures
       #    Task 2 integration tests only exercise the secure path.
@@ -90,6 +96,19 @@ jobs:
           USE_SQLITE: 1
         run: |
           TEST_MODE=insecure python manage.py test
+
+      # 8b) Optional coverage report for secure mode (re-runs tests quickly)
+      - name: Generate coverage report (secure mode)
+        working-directory: ca2_secure_website
+        env:
+          SECURE_MODE: secure
+          USE_SQLITE: 1
+        run: |
+          python -m pip install coverage
+          coverage run manage.py test
+          mkdir -p ../logs/coverage
+          coverage xml -o ../logs/coverage/coverage_secure.xml
+          coverage html -d ../logs/coverage/html
 
       # 9) Run Bandit SAST and upload SARIF for GitHub code scanning.
       - name: Run Bandit SAST (SARIF)
@@ -160,7 +179,8 @@ jobs:
           python task2_scripts/dast_zap.py \
             -t http://127.0.0.1:8000 \
             --auto \
-            --fail-on-medium
+            --fail-on-medium \
+            --sarif-path logs/zap_reports/zap_dast.sarif
 
       # 16) Upload logs and security reports as CI artefacts for CA2 evidence.
       - name: Upload logs and reports
@@ -177,6 +197,7 @@ jobs:
             logs/json_logs
             logs/excel
             logs/zap_reports
+            logs/coverage
 
       # 17) Always stop containers and remove volumes to keep CI clean.
       - name: Stop Docker Compose and clean volumes
@@ -184,4 +205,37 @@ jobs:
         working-directory: docker
         run: |
           docker compose down -v
+
+      # 18) Optional Slack/Discord notification on failure (if webhook is set).
+      - name: Notify Slack on failure (optional)
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          payload='{"text":"CA2 CI pipeline failed for commit '${{ github.sha }}'."}'
+          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+
+  codeql-analysis:
+    name: CodeQL Static Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python' ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+
 

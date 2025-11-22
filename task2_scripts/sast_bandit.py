@@ -29,7 +29,7 @@ import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 # Approximate mapping from Bandit test IDs or patterns to OWASP Top 10 2021
@@ -192,6 +192,27 @@ def print_summary(report: Dict[str, Any]) -> None:
             category_counts.items(), key=lambda kv: (-kv[1], kv[0])
         ):
             print(f"      - {cat}: {count}")
+
+
+class _HelperCallable:
+    """
+    Simple callable wrapper that does not implement the function descriptor
+    protocol. This prevents Python from turning helpers into bound methods when
+    they are attached to a test class, while still allowing them to behave like
+    normal functions.
+    """
+
+    def __init__(self, func: Callable[..., Any]) -> None:
+        self._func = func
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - trivial
+        return self._func(*args, **kwargs)
+
+
+# Expose a non-descriptor callable for tests while still keeping normal
+# function-like behaviour inside this module and for external callers.
+_print_summary_impl = print_summary
+print_summary = _HelperCallable(_print_summary_impl)
 
 
 def parse_args() -> argparse.Namespace:
