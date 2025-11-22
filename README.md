@@ -452,11 +452,9 @@ flowchart LR
 
     B --> C[GitHub Actions CI Pipeline]
 
-    C --> D[Install Dependencies &amp; Security Tools]
-
-    C --> E[Run Django Tests<br/>SECURE + INSECURE Modes]
-
-    C --> F[Static Analysis<br/>(Bandit SAST)]
+    C --> D["Install Dependencies and Security Tools"]
+    C --> E["Run Django Tests\nSECURE + INSECURE Modes"]
+    C --> F["Static Analysis\n(Bandit SAST)"]
 
     D --> G[Build Docker Images]
 
@@ -466,11 +464,11 @@ flowchart LR
 
     H --> I{Tests Passing?}
 
-    I -->|No| X[Stop Pipeline<br/>Fail Build]
+    I -->|No| X["Stop Pipeline\nFail Build"]
 
-    I -->|Yes| J[Push Docker Image to Registry<br/>(Optional Enhancement)]
+    I -->|Yes| J["Push Docker Image to Registry\n(Optional Enhancement)"]
 
-    J --> K[Deploy to Staging<br/>Docker Compose / Kubernetes]
+    J --> K["Deploy to Staging\nDocker Compose / Kubernetes"]
 
     K --> L[Staging Smoke Tests]
 
