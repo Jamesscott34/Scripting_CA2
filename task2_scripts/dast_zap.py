@@ -1,18 +1,31 @@
 """
-Advanced OWASP ZAP DAST helper for the CA2 Django project.
+Advanced OWASP ZAP DAST helper for the CA2 Secure scripting
 
 
-What this script does:
-- Optionally starts a ZAP daemon in Docker for you (if requested).
-- Checks that the ZAP API is reachable before scanning.
-- Opens the target URL in ZAP.
-- Runs a spider to discover as many URLs as possible.
-- Runs an active scan against the discovered URLs.
-- Prints a basic summary and can optionally write a JSON report of alerts.
+- Start a ZAP daemon in Docker automatically (or connect to an existing one).
+- Perform a quick HEAD pre-check to verify the target is reachable and not in a
+  redirect loop before scanning.
+- Create a dedicated ZAP context with include/exclude rules for the target.
+- Optionally configure form-based authentication and run the spider/active scan
+  *as an authenticated user*.
+- Run a classic spider followed by an active scan, polling progress at a
+  configurable interval.
+- Collect all alerts and build:
+  - A severity summary (High/Medium/Low/Informational).
+  - An approximate OWASP Top 10 mapping based on alert names.
+  - A simple impact score and per-rule (pluginId) counts.
+- Write results in multiple formats (JSON, HTML, XML, Markdown, Excel, text
+  log), plus an optional minimal SARIF report for GitHub Security dashboards.
+- Support quality-of-life flags such as:
+  - `--ignore-alerts` to drop expected/noisy alerts via regex.
+  - `--baseline-json` to compare current vs previous severity counts.
+  - `--summary-only` for fast console-only runs without writing artefacts.
+  - `--fail-on-high` / `--fail-on-medium` for CI gating by risk level.
 """
 
 import argparse
 import json
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -22,6 +35,32 @@ from urllib.parse import urlparse
 
 import requests
 from zapv2 import ZAPv2
+
+
+# Approximate mapping from common ZAP alert names to OWASP Top 10 2021
+# categories. This is intentionally simplified and designed for reporting /
+# teaching purposes rather than exact compliance.
+OWASP_ZAP_MAP: Dict[str, List[str]] = {
+    # Cross-Site Scripting variants.
+    "cross site scripting": ["A03:2021-Injection (XSS)"],
+    "xss": ["A03:2021-Injection (XSS)"],
+    # SQL injection and injection-style findings.
+    "sql injection": ["A03:2021-Injection"],
+    "command injection": ["A03:2021-Injection"],
+    # Missing or misconfigured security headers / debug settings.
+    "x-content-type-options header missing": ["A05:2021-Security Misconfiguration"],
+    "x-frame-options header not set": ["A05:2021-Security Misconfiguration"],
+    "x-xss-protection header not set": ["A05:2021-Security Misconfiguration"],
+    "content-security-policy": ["A05:2021-Security Misconfiguration"],
+    "information disclosure": ["A05:2021-Security Misconfiguration"],
+    # Authentication / access control issues.
+    "authentication": ["A01:2021-Broken Access Control"],
+    "authorization": ["A01:2021-Broken Access Control"],
+    "directory browsing": ["A01:2021-Broken Access Control"],
+    # Sensitive data exposure / weak transport.
+    "insecure communication": ["A02:2021-Cryptographic Failures"],
+    "insecure cookie": ["A02:2021-Cryptographic Failures"],
+}
 
 
 def _zap_client(api_key: str, host: str, port: int) -> ZAPv2:
@@ -127,6 +166,7 @@ def run_dast(
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
     poll_delay: float = 2.0,
+    ignore_alerts: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run a spider + active scan against the target and return ZAP alerts."""
 
@@ -209,11 +249,24 @@ def run_dast(
         print(f"  - Active scan progress: {zap.ascan.status(active_id)}%")
         time.sleep(poll_delay)
 
-    alerts = zap.core.alerts()
+    raw_alerts = zap.core.alerts()
+    # Apply optional regex-based filtering to remove expected/noisy alerts
+    # (for example, known benign login failures).
+    alerts: List[Dict[str, Any]] = []
+    ignore_patterns: List[re.Pattern[str]] = [
+        re.compile(pat, re.IGNORECASE) for pat in (ignore_alerts or [])
+    ]
+    for alert in raw_alerts:
+        name = str(alert.get("alert", "") or "")
+        if any(p.search(name) for p in ignore_patterns):
+            continue
+        alerts.append(alert)
     print(f"[+] Scan complete. Total alerts: {len(alerts)}")
 
-    # Basic severity summary.
+    # Basic severity summary and approximate OWASP Top 10 mapping.
     severities: Dict[str, int] = {"High": 0, "Medium": 0, "Low": 0, "Informational": 0}
+    category_counts: Dict[str, int] = {}
+    rule_counts: Dict[str, int] = {}
     for alert in alerts:
         risk = alert.get("risk", "Informational")
         if risk in severities:
@@ -221,12 +274,45 @@ def run_dast(
         else:
             severities["Informational"] += 1
 
+        # Attach OWASP categories to each alert for reporting. We perform a
+        # simple case-insensitive lookup based on the alert name.
+        alert_name = str(alert.get("alert", "") or "").lower()
+        owasp_categories: List[str] = []
+        for key, cats in OWASP_ZAP_MAP.items():
+            if key in alert_name:
+                owasp_categories.extend(cats)
+        # De-duplicate while preserving order.
+        unique_cats: List[str] = []
+        for cat in owasp_categories:
+            if cat not in unique_cats:
+                unique_cats.append(cat)
+
+        if unique_cats:
+            alert["owasp_categories"] = unique_cats  # type: ignore[assignment]
+            for cat in unique_cats:
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+
+        plugin_id = str(alert.get("pluginId", "") or "")
+        if plugin_id:
+            rule_counts[plugin_id] = rule_counts.get(plugin_id, 0) + 1
+
+    # Simple impact score to give a rough sense of risk "mass".
+    impact_score = (
+        severities["High"] * 9
+        + severities["Medium"] * 6
+        + severities["Low"] * 3
+        + severities["Informational"] * 1
+    )
+
     result: Dict[str, Any] = {
         "target": target,
         "context_id": context_id,
         "user_id": user_id,
         "alerts": alerts,
         "severity_summary": severities,
+        "owasp_summary": category_counts,
+        "rule_summary": rule_counts,
+        "impact_score": impact_score,
     }
 
     # Handle JSON output via legacy --output-json first.
@@ -262,11 +348,22 @@ def run_dast(
             md_lines: List[str] = [
                 f"# ZAP DAST Summary for {target}",
                 "",
+                "## Scan metadata",
+                f"- Target: `{target}`",
+                f"- Auth mode: {'authenticated' if user_id is not None else 'unauthenticated'}",
+                f"- Included: {', '.join(include or []) or '(default target host)'}",
+                f"- Excluded: {', '.join(exclude or []) or '(none)'}",
+                "",
                 "## Severity counts",
             ]
             for sev, count in severities.items():
                 md_lines.append(f"- **{sev}**: {count}")
             md_lines.append("")
+            if category_counts:
+                md_lines.append("## OWASP Top 10 signals (approximate)")
+                for cat, count in category_counts.items():
+                    md_lines.append(f"- **{cat}**: {count}")
+                md_lines.append("")
             md_lines.append("## Alerts (top-level summary)")
             for alert in alerts:
                 md_lines.append(
@@ -433,6 +530,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--ignore-alerts",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional regex patterns; any alerts whose name matches these "
+            "patterns will be excluded from summaries and reports."
+        ),
+    )
+    parser.add_argument(
         "--poll-delay",
         type=float,
         default=2.0,
@@ -448,6 +554,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Exit with non-zero status if any Medium or High risk alerts are found."
+        ),
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help=(
+            "Only print a console severity summary; do not write JSON/HTML/Excel "
+            "reports or text logs. Intended for quick local checks."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-json",
+        default=None,
+        help=(
+            "Optional path to a previous ZAP JSON report to compare against. "
+            "When provided, a trend summary (diff in High/Medium/Low counts) is "
+            "printed after the main summary."
+        ),
+    )
+    parser.add_argument(
+        "--sarif-path",
+        default=None,
+        help=(
+            "Optional path to write a minimal SARIF v2.1.0 report derived from "
+            "ZAP alerts (useful for GitHub Security dashboards)."
         ),
     )
     parser.add_argument(
@@ -467,6 +598,7 @@ def main() -> None:
     output_json = Path(args.output_json) if args.output_json else None
     formats = [f.strip().lower() for f in args.formats.split(",") if f.strip()]
     output_base = Path(args.output_prefix) if args.output_prefix else None
+    sarif_path = Path(args.sarif_path) if args.sarif_path else None
 
     # Auto mode: turn on Docker, set a sensible output prefix under logs/zap_reports
     # and default to multiple formats.
@@ -481,6 +613,13 @@ def main() -> None:
             output_base = Path("logs") / "zap_reports" / f"zap_{safe_host}_{date_str}"
         if not formats:
             formats = ["json", "html", "md", "xlsx"]
+
+    # In summary-only mode, we suppress all file outputs and only emit a
+    # severity summary to the console.
+    if args.summary_only:
+        output_json = None
+        output_base = None
+        formats = []
 
     # Quick availability check for the target before we start ZAP work.
     if not check_target_available(args.target, insecure=args.insecure):
@@ -543,17 +682,69 @@ def main() -> None:
             include=args.include,
             exclude=args.exclude,
             poll_delay=args.poll_delay,
+            ignore_alerts=args.ignore_alerts,
         )
     finally:
         # If we started Docker automatically, clean it up.
         if args.auto_docker:
             stop_zap_docker(args.docker_container)
 
-    # Optionally fail the process based on alert severities (CI-style usage).
+    # Print a concise console summary and optionally fail the process based on
+    # alert severities (CI-style usage).
     if result is not None:
         severities = result.get("severity_summary", {})
+        owasp_summary = result.get("owasp_summary", {}) or {}
         high = int(severities.get("High", 0) or 0)
         medium = int(severities.get("Medium", 0) or 0)
+
+        print("\n[+] ZAP Severity Summary")
+        for sev in ("High", "Medium", "Low", "Informational"):
+            print(f"    {sev}: {int(severities.get(sev, 0) or 0)}")
+
+        if owasp_summary:
+            print("    OWASP Top 10 signals (approximate):")
+            for cat, count in sorted(
+                owasp_summary.items(), key=lambda kv: (-int(kv[1] or 0), kv[0])
+            ):
+                print(f"      - {cat}: {int(count or 0)}")
+
+        # Show a few example alerts to give context.
+        alerts = result.get("alerts", [])[:5]
+        if alerts:
+            print("    Sample alerts:")
+            for alert in alerts:
+                print(
+                    f"      - [{alert.get('risk')}] {alert.get('alert')} "
+                    f"on {alert.get('url')}"
+                )
+
+        # Optional trend comparison against a previous JSON report.
+        if args.baseline_json:
+            baseline_path = Path(args.baseline_json)
+            if baseline_path.exists():
+                try:
+                    baseline = json.loads(
+                        baseline_path.read_text(encoding="utf-8")
+                    )
+                except json.JSONDecodeError as exc:
+                    print(
+                        f"[!] Failed to parse baseline ZAP JSON '{baseline_path}': {exc}"
+                    )
+                else:
+                    base_sev = baseline.get("severity_summary", {}) or {}
+                    print("\n[+] Trend vs baseline")
+                    for level in ("High", "Medium", "Low", "Informational"):
+                        curr = int(severities.get(level, 0) or 0)
+                        prev = int(base_sev.get(level, 0) or 0)
+                        delta = curr - prev
+                        sign = "+" if delta > 0 else ""
+                        print(
+                            f"    {level}: {curr} (baseline {prev}, change {sign}{delta})"
+                        )
+            else:
+                print(
+                    f"[!] Baseline ZAP JSON '{baseline_path}' not found; skipping trend comparison."
+                )
 
         if args.fail_on_high and high > 0:
             print(
@@ -566,6 +757,80 @@ def main() -> None:
                 f"(High={high}, Medium={medium}) per --fail-on-medium."
             )
             raise SystemExit(1)
+
+        # Optionally emit a minimal SARIF report for CI integration.
+        if sarif_path is not None:
+            _write_sarif(result, sarif_path)
+
+
+def _write_sarif(result: Dict[str, Any], sarif_path: Path) -> None:
+    """Write a minimal SARIF v2.1.0 report derived from ZAP alerts."""
+
+    alerts: List[Dict[str, Any]] = result.get("alerts", [])
+    runs_tool = {
+        "driver": {
+            "name": "OWASP ZAP",
+            "informationUri": "https://www.zaproxy.org/",
+            "rules": [],
+        }
+    }
+
+    rules_index: Dict[str, int] = {}
+    rules_list: List[Dict[str, Any]] = []
+    sarif_results: List[Dict[str, Any]] = []
+
+    for alert in alerts:
+        plugin_id = str(alert.get("pluginId", "") or "ZAP")
+        alert_name = str(alert.get("alert", "") or "ZAP Alert")
+        risk = str(alert.get("risk", "Informational") or "Informational")
+        url = str(alert.get("url", "") or "")
+
+        if plugin_id not in rules_index:
+            rules_index[plugin_id] = len(rules_list)
+            rules_list.append(
+                {
+                    "id": plugin_id,
+                    "name": alert_name,
+                    "shortDescription": {"text": alert_name},
+                    "helpUri": "https://www.zaproxy.org/docs/alerts/",
+                }
+            )
+
+        level = "note"
+        if risk.lower() == "high":
+            level = "error"
+        elif risk.lower() == "medium":
+            level = "warning"
+
+        sarif_results.append(
+            {
+                "ruleId": plugin_id,
+                "level": level,
+                "message": {"text": alert_name},
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": url},
+                        }
+                    }
+                ],
+            }
+        )
+
+    runs_tool["driver"]["rules"] = rules_list
+    sarif = {
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": runs_tool,
+                "results": sarif_results,
+            }
+        ],
+    }
+
+    sarif_path.parent.mkdir(parents=True, exist_ok=True)
+    sarif_path.write_text(json.dumps(sarif, indent=2))
+    print(f"[+] SARIF report written to {sarif_path}")
 
 
 if __name__ == "__main__":

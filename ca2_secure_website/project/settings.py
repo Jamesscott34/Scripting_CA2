@@ -125,10 +125,20 @@ LOGOUT_REDIRECT_URL = "login"
 
 SESSION_COOKIE_SECURE = SECURE_MODE == "secure"
 CSRF_COOKIE_SECURE = SECURE_MODE == "secure"
-# In real production you'd terminate HTTPS in a reverse proxy and keep this on;
-# for the CA2 teaching project we disable automatic HTTPS redirects so the
-# built-in dev server can be used over plain HTTP.
-SECURE_SSL_REDIRECT = False
+
+# Optional toggle to force HTTPS-only access in environments where TLS is
+# terminated by a reverse proxy (e.g. nginx, load balancer). We keep this
+# behind an explicit flag so local development against http://127.0.0.1 does
+# not break with redirect loops.
+FORCE_HTTPS = os.getenv("FORCE_HTTPS", "0").lower() in {"1", "true", "yes"}
+
+# When FORCE_HTTPS is enabled and we are in secure mode, redirect all HTTP
+# requests to HTTPS and trust the X-Forwarded-Proto header from the proxy.
+SECURE_SSL_REDIRECT = FORCE_HTTPS and SECURE_MODE == "secure"
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https") if FORCE_HTTPS else None
+)
+
 SECURE_BROWSER_XSS_FILTER = SECURE_MODE == "secure"
 SECURE_CONTENT_TYPE_NOSNIFF = SECURE_MODE == "secure"
 SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_MODE == "secure"

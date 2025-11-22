@@ -16,9 +16,10 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+import unittest
 
 from django.contrib.auth.models import User
-from django.test import Client, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from .models import BankAccount, SecurityConfig, Transaction
@@ -300,5 +301,78 @@ class Task2ScriptsLogTests(TestCase):
                 mode,
             ]
             self._run_script(bandit_cmd, f"bandit_{mode}.log", mode)
+
+
+class Task2HelperUnitTests(SimpleTestCase):
+    """
+    Lightweight unit tests for core Task 2 helper functions.
+
+    These complement the integration tests above by exercising individual
+    helpers such as the fuzz payload builders and Bandit summary formatter.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        # Locate the repository root and task2_scripts folder in the same way
+        # as Task2ScriptsLogTests, then attempt to import helper functions.
+        here = Path(__file__).resolve()
+        repo_root = here.parents[2]
+        task2_dir = repo_root / "task2_scripts"
+        if not task2_dir.exists():
+            raise unittest.SkipTest("Task 2 scripts not available in this environment.")
+
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+
+        # Lazy-import into class attributes so individual tests can use them.
+        from task2_scripts.fuzz_test import (  # type: ignore
+            build_bodies,
+            build_files,
+            load_payload_library,
+        )
+        from task2_scripts.sast_bandit import print_summary  # type: ignore
+
+        cls._build_bodies = build_bodies
+        cls._build_files = build_files
+        cls._load_payload_library = load_payload_library
+        cls._print_summary = print_summary
+
+    def test_load_payload_library_has_expected_categories(self) -> None:
+        library = self._load_payload_library()
+        for key in ["sql", "xss", "path", "unicode", "django"]:
+            self.assertIn(key, library)
+            self.assertIsInstance(library[key], list)
+            self.assertTrue(
+                library[key],
+                msg=f"Payload category '{key}' should not be empty",
+            )
+
+    def test_build_bodies_json_and_form(self) -> None:
+        payload = "test-payload"
+        json_body, form_body = self._build_bodies(payload, "json")
+        self.assertIsNotNone(json_body)
+        self.assertIsNone(form_body)
+        self.assertEqual(json_body["username"], payload)
+
+        json_body, form_body = self._build_bodies(payload, "form")
+        self.assertIsNone(json_body)
+        self.assertIsNotNone(form_body)
+        self.assertEqual(form_body["password"], payload)
+
+    def test_build_files_creates_large_enough_payload(self) -> None:
+        payload = "x"
+        files = self._build_files(payload, enable_files=True)
+        self.assertIsNotNone(files)
+        name, content, mime = files["file"]
+        self.assertTrue(name)
+        self.assertTrue(mime)
+        # The helper should expand very small payloads to at least ~1KB.
+        self.assertGreaterEqual(len(content), 1024)
+
+    def test_print_summary_handles_empty_report(self) -> None:
+        # An empty report should not raise and should print a sensible summary.
+        # We capture stdout via the Django test runner's output capture.
+        self._print_summary({})
 
 

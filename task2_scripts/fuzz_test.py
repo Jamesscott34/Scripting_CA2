@@ -1,22 +1,36 @@
 """
-Fuzz testing helper script for the CA2 website.
+Advanced HTTP fuzzing engine for the CA2 secure scripting project.
 
-This script is intentionally simple but demonstrates several important ideas:
+This script is a focused but capable fuzzer for the Django website (and
+similar HTTP APIs). It demonstrates a number of real-world fuzzing concepts:
 
-- Sending unexpected input (including punctuation and long strings) to HTTP
-  endpoints to see how they behave under stress.
+- Sending unexpected input (including punctuation and very long strings) to
+  HTTP endpoints to see how they behave under stress.
 - Supporting multiple HTTP methods (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS).
 - Fuzzing both **query parameters** and **request bodies** (JSON or form),
-  including optional multipart file uploads.
+  including optional multipart file uploads to exercise upload endpoints.
 - Using structured **payload categories** (SQLi, XSS, path traversal, Unicode,
-  Django template injections) loaded from a JSON library file.
-- Recording every request/response pair in a JSON file for later analysis or
-  inclusion in a security report.
-- A "buffer_overflow" style mode that generates *very* long payloads to test
-  how the application handles large request sizes.
+  Django template injections) from a built-in library, with an optional
+  mutation engine to distort payloads (invert case, insert special chars,
+  delete/duplicate characters, reverse strings, etc.).
+- Recording every request/response pair in JSON for later analysis and writing
+  per-run and aggregate text logs and Excel reports.
+- A "buffer_overflow" style mode that generates very large payloads to test
+  how the application handles large request sizes and potential DoS conditions.
+- Optional **authenticated fuzzing** using a Django-style login flow with CSRF
+  token handling and session cookie reuse.
+- Header and cookie fuzzing via external JSON files and `<fuzz>` placeholders.
+- **Replay** and **replay-mutate** modes to resend payloads from previous
+  reports to confirm or explore interesting behaviour.
+- Threaded fuzzing (`--threads`) to run multiple endpoint/category jobs in
+  parallel.
+- Built-in anomaly detection (5xx errors, error signatures, slow/large
+  responses, reflection, redirect loops, rate-limiting) with approximate
+  OWASP Top 10 mapping and simple input coverage summaries printed at the end
+  of each run.
 
 It is not a full fuzzing framework, but it is production-ready enough to be
-used as a teaching tool and a starting point for more advanced testing.
+used as a teaching tool and a solid starting point for more advanced testing.
 """
 
 import argparse
@@ -29,7 +43,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -56,6 +70,26 @@ ERROR_PATTERNS: List[str] = [
     "UNIQUE constraint failed",
     "TemplateSyntaxError",
 ]
+
+# Simple mapping from anomaly reason labels to OWASP Top 10 style categories.
+# This is intentionally approximate and intended for teaching/reporting rather
+# than formal classification.
+OWASP_REASON_MAP: Dict[str, List[str]] = {
+    # Reflection of potentially malicious input back to the client.
+    "reflected_payload": ["A03:2021-Injection (XSS)"],
+    # Unhandled exceptions / 5xx responses and stack traces.
+    "5xx_error": ["A05:2021-Security Misconfiguration"],
+    "error_signature": ["A05:2021-Security Misconfiguration"],
+    # Unexpected 4xx errors can indicate broken access control or validation gaps.
+    "client_error": ["A01:2021-Broken Access Control"],
+    # Excessive redirects often come from misconfiguration.
+    "redirect_loop": ["A05:2021-Security Misconfiguration"],
+    # Very slow or very large responses can indicate insecure design or DoS risk.
+    "slow_response": ["A04:2021-Insecure Design"],
+    "large_body": ["A04:2021-Insecure Design"],
+    # Rate limiting usually indicates a protection mechanism, so we do not
+    # classify it as a vulnerability category here.
+}
 
 # Built-in payload categories used for targeted fuzzing. These are hard-coded
 # so that the fuzzer has sensible defaults even without any external files.
@@ -286,43 +320,64 @@ def build_authenticated_session(
     return session
 
 
-def mutate_payload(payload: str) -> str:
+def _mut_invert_case(payload: str) -> str:
+    return "".join(
+        c.lower() if c.isupper() else c.upper() if c.islower() else c
+        for c in payload
+    )
+
+
+def _mut_duplicate(payload: str) -> str:
+    idx = random.randrange(len(payload))
+    return payload[:idx] + payload[idx] * 2 + payload[idx + 1 :]
+
+
+def _mut_delete(payload: str) -> str:
+    if len(payload) <= 1:
+        return payload
+    idx = random.randrange(len(payload))
+    return payload[:idx] + payload[idx + 1 :]
+
+
+def _mut_insert_special(payload: str) -> str:
+    specials = "!@#$%^&*()[]{}<>?/\\|"
+    idx = random.randrange(len(payload) + 1)
+    ch = random.choice(specials)
+    return payload[:idx] + ch + payload[idx:]
+
+
+def _mut_reverse(payload: str) -> str:
+    return payload[::-1]
+
+
+MUTATOR_FUNCS: Dict[str, Callable[[str], str]] = {
+    "invert_case": _mut_invert_case,
+    "duplicate": _mut_duplicate,
+    "delete": _mut_delete,
+    "insert_special": _mut_insert_special,
+    "reverse": _mut_reverse,
+}
+
+
+def mutate_payload(payload: str, strategy: Optional[str] = None) -> str:
     """
     Apply a simple mutation to a payload string.
 
     The goal is not to be exhaustive like AFL, but to introduce small,
     repeatable distortions that may trigger edge cases in parsers and
-    validation logic.
+    validation logic. The optional ``strategy`` argument can be used to select
+    a specific mutator; if omitted, one is chosen at random.
     """
     if not payload:
         return payload
 
-    choice = random.choice(
-        ["invert_case", "duplicate", "delete", "insert_special", "reverse"]
-    )
+    if not strategy:
+        strategy = random.choice(list(MUTATOR_FUNCS.keys()))
 
-    if choice == "invert_case":
-        return "".join(
-            c.lower() if c.isupper() else c.upper() if c.islower() else c
-            for c in payload
-        )
-
-    if choice == "duplicate":
-        idx = random.randrange(len(payload))
-        return payload[:idx] + payload[idx] * 2 + payload[idx + 1 :]
-
-    if choice == "delete" and len(payload) > 1:
-        idx = random.randrange(len(payload))
-        return payload[:idx] + payload[idx + 1 :]
-
-    if choice == "insert_special":
-        specials = "!@#$%^&*()[]{}<>?/\\|"
-        idx = random.randrange(len(payload) + 1)
-        ch = random.choice(specials)
-        return payload[:idx] + ch + payload[idx:]
-
-    # "reverse" or fallback
-    return payload[::-1]
+    func = MUTATOR_FUNCS.get(strategy)
+    if not func:
+        return payload
+    return func(payload)
 
 
 def fuzz_endpoint(
@@ -393,8 +448,12 @@ def fuzz_endpoint(
             else:
                 base = random_string(0, 80)
 
+        mutator_name: Optional[str] = None
         if mutate:
-            base = mutate_payload(base)
+            # Select a specific mutator so we can record which strategy was used
+            # for this payload in the samples and any derived corpus.
+            mutator_name = random.choice(list(MUTATOR_FUNCS.keys()))
+            base = mutate_payload(base, strategy=mutator_name)
 
         params = {"q": base}
 
@@ -473,6 +532,7 @@ def fuzz_endpoint(
                         "has_file": bool(files),
                         "has_headers": bool(headers),
                         "has_cookies": bool(cookies),
+                        "mutator": mutator_name,
                         "status_code": status,
                         "duration": duration,
                         "response_length": body_len,
@@ -545,8 +605,64 @@ def fuzz_endpoint(
         if reasons:
             sample["anomaly"] = True
             sample["anomaly_reasons"] = reasons
+            # Attach approximate OWASP Top 10 style categories for reporting.
+            owasp_categories: List[str] = []
+            for reason in reasons:
+                for cat in OWASP_REASON_MAP.get(reason, []):
+                    if cat not in owasp_categories:
+                        owasp_categories.append(cat)
+            if owasp_categories:
+                sample["owasp_categories"] = sorted(owasp_categories)
         else:
             sample["anomaly"] = False
+
+    # Print a short anomaly-centric summary to help quickly spot interesting
+    # behaviour without having to open the JSON/Excel reports.
+    total_samples = len(samples)
+    anomalous_samples = [s for s in samples if s.get("anomaly")]
+    total_anomalous = len(anomalous_samples)
+    if total_samples:
+        pct = (total_anomalous / total_samples) * 100
+    else:
+        pct = 0.0
+
+    print("\n[+] Anomaly summary")
+    print(f"    Total samples: {total_samples}")
+    print(f"    Anomalous samples: {total_anomalous} ({pct:.1f}%)")
+
+    # Count anomaly reasons across all anomalous samples.
+    reason_counts: Dict[str, int] = {}
+    category_counts: Dict[str, int] = {}
+    for s in anomalous_samples:
+        for reason in s.get("anomaly_reasons", []):
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            for cat in OWASP_REASON_MAP.get(reason, []):
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    if reason_counts:
+        print("    Reasons:")
+        for reason, count in sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"      - {reason}: {count}")
+    else:
+        print("    (no anomalies detected)")
+
+    if category_counts:
+        print("    OWASP Top 10 signals:")
+        for cat, count in sorted(
+            category_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        ):
+            print(f"      - {cat}: {count}")
+
+    # Simple input/feature coverage-style summary.
+    if samples:
+        with_files = sum(1 for s in samples if s.get("has_file"))
+        with_headers = sum(1 for s in samples if s.get("has_headers"))
+        with_cookies = sum(1 for s in samples if s.get("has_cookies"))
+
+        print("\n[+] Input coverage summary")
+        print(f"    Requests with file uploads: {with_files}/{total_samples}")
+        print(f"    Requests with custom headers: {with_headers}/{total_samples}")
+        print(f"    Requests with custom cookies: {with_cookies}/{total_samples}")
 
     # Determine output directory and filenames.
     parsed = urlparse(base_url)
@@ -603,6 +719,37 @@ def fuzz_endpoint(
 
         json_path.write_text(json.dumps(data, indent=2))
         print(f"[+] JSON fuzz report written to {json_path}")
+
+        # Derive a small "interesting input" corpus based on anomalies so it can
+        # be reused in future runs or inspected independently of the full log.
+        interesting_inputs: List[Dict[str, Any]] = []
+        for s in samples:
+            if not s.get("anomaly"):
+                continue
+            params = s.get("params") or {}
+            interesting_inputs.append(
+                {
+                    "payload": params.get("q"),
+                    "mutator": s.get("mutator"),
+                    "reasons": s.get("anomaly_reasons", []),
+                    "owasp_categories": s.get("owasp_categories", []),
+                    "status_code": s.get("status_code"),
+                }
+            )
+
+        if interesting_inputs:
+            corpus_path = output_dir / (
+                f"fuzz_corpus_{safe_host}_{safe_path}_{date_str}"
+                f"{mode_suffix}{category_suffix}.json"
+            )
+            corpus_doc = {
+                "base_url": base_url,
+                "path": path,
+                "generated_at": datetime.now().isoformat(),
+                "inputs": interesting_inputs,
+            }
+            corpus_path.write_text(json.dumps(corpus_doc, indent=2))
+            print(f"[+] Interesting input corpus written to {corpus_path}")
 
         # Also write a short text log summarising the run.
         summary_lines = [
@@ -799,6 +946,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to a fuzz JSON report to replay with additional mutation applied.",
     )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help=(
+            "Only print console summaries (status/anomalies); do not write "
+            "JSON/log/Excel artefacts."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -969,8 +1124,8 @@ def main() -> None:
 
         # In mode=auto we run *both* random and buffer_overflow fuzzing.
         # When args.auto is set we only write aggregate outputs, not per-run
-        # JSON/log files.
-        write_files = not args.auto
+        # JSON/log files. In summary-only mode we suppress all file outputs.
+        write_files = (not args.auto) and (not args.summary_only)
 
         if args.mode == "auto":
             output_dir = output_json
@@ -1047,8 +1202,8 @@ def main() -> None:
             run_job(job)
 
     # If we have collected aggregate data (full auto mode), emit combined JSON,
-    # log and an Excel workbook with one sheet per run.
-    if aggregate_runs:
+    # log and an Excel workbook with one sheet per run (unless summary-only).
+    if aggregate_runs and not args.summary_only:
         parsed = urlparse(args.base_url)
         host = parsed.netloc or parsed.path or "unknown"
         safe_host = host.replace(":", "_").replace(".", "_")

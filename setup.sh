@@ -1,63 +1,188 @@
 #!/usr/bin/env bash
+
+# Enable "strict mode" for safer shell scripting:
+# -e  : exit immediately if any command exits with a non-zero status
+# -u  : treat unset variables as an error and exit immediately
+# -o pipefail : the return value of a pipeline is the status of
+#               the last command to exit with a non-zero status
 set -euo pipefail
 
 ###############################################################################
 # Secure Programming & Scripting – CA2 bootstrap script
 #
-# This script sets up a virtual environment, installs dependencies for the
-# Django project and security tooling, and applies initial database migrations.
+# This script is intended to be a **one-stop bootstrap** for the CA2 project.
+# It performs the following high-level steps:
+#   1. Verify prerequisites (Python 3, Docker, Docker Compose).
+#   2. Create and activate a Python virtual environment.
+#   3. Install all project dependencies from `requirements.txt`.
+#   4. Run Django migrations and seed demo data (SQLite).
+#   5. Execute Django tests locally in SECURE and INSECURE modes.
+#   6. Build and start the Docker Compose stack (`web` + `db`).
+#   7. Run Django tests inside Docker in both modes.
+#
+# Prerequisites:
+#   - Python 3 (python3 on PATH)
+#   - Docker Engine
+#   - Docker Compose v2 (available as `docker compose`)
 #
 # Usage:
 #   chmod +x setup.sh
 #   ./setup.sh
 ###############################################################################
 
+# Resolve the absolute path to the **repository root**. This assumes that
+# `setup.sh` lives directly under the root (alongside README.md, requirements.txt).
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Path for the local Python virtual environment. Keeping it under the project
+# root makes it easy to remove with `rm -rf .venv` without touching system Python.
 VENV_DIR="${PROJECT_ROOT}/.venv"
 
-echo "[*] Creating virtual environment in ${VENV_DIR} (if not present)..."
+# Print a concise usage/help message. This is intentionally simple and
+# avoids introducing a full CLI parser for the CA2 context.
+usage() {
+  cat <<EOF
+CA2 setup script
+
+Usage:
+  ./setup.sh
+
+This script will:
+  - Create/activate a Python virtualenv in .venv
+  - Install dependencies from requirements.txt
+  - Run Django migrations and seed demo data
+  - Run Django tests (secure + insecure) locally
+  - Build & start Docker (web + db) and run tests in containers
+
+Options:
+  -h, --help   Show this help message and exit
+EOF
+}
+
+# Basic flag handling – only supports -h/--help for now. Any other arguments
+# are ignored to keep behaviour simple and backwards compatible.
+if [[ "${1-}" == "-h" || "${1-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+# Prepare a log file under the repo-level logs directory so that the full
+# bootstrap run can be attached as CA2 evidence or inspected after failures.
+LOG_DIR="${PROJECT_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/setup_$(date +%Y%m%d_%H%M%S).log"
+
+# Logging helpers: write messages to both stdout (for live visibility) and
+# to a timestamped log file (for later inspection).
+log() {
+  printf '%s\n' "$*" | tee -a "${LOG_FILE}"
+}
+
+log_err() {
+  printf '%s\n' "$*" | tee -a "${LOG_FILE}" >&2
+}
+
+# Small helper to ensure required commands are available before we start doing
+# real work. Failing fast here avoids half-completed setups.
+require_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_err "[!] Required command '${cmd}' not found on PATH. Please install it and retry."
+    exit 1
+  fi
+}
+
+log "[*] Checking prerequisites..."
+
+# Python is needed for both the virtualenv and Django management commands.
+require_cmd python3
+
+# Sanity-check that the Django project exists where we expect it to be and
+# that `manage.py` is present. This protects against running from the wrong
+# directory or partial checkouts.
+if [[ ! -d "${PROJECT_ROOT}/ca2_secure_website" ]] || [[ ! -f "${PROJECT_ROOT}/ca2_secure_website/manage.py" ]]; then
+  log_err "[!] Django project directory 'ca2_secure_website/' with 'manage.py' not found under ${PROJECT_ROOT}."
+  log_err "[!] Please run this script from the repository root (where README.md lives)."
+  exit 1
+fi
+
+# Likewise, ensure the Docker configuration folder is present before attempting
+# to build or run containers.
+if [[ ! -d "${PROJECT_ROOT}/docker" ]] || [[ ! -f "${PROJECT_ROOT}/docker/docker-compose.yml" ]]; then
+  log_err "[!] Docker directory or docker-compose.yml not found under ${PROJECT_ROOT}/docker."
+  log_err "[!] Ensure the 'docker/' folder exists and contains 'docker-compose.yml'."
+  exit 1
+fi
+
+log "[*] Creating virtual environment in ${VENV_DIR} (if not present)..."
+# `python3 -m venv` is idempotent: if the directory already exists it will not
+# destroy the environment; this allows re-running the script safely.
 python3 -m venv "${VENV_DIR}"
 
-echo "[*] Activating virtual environment..."
+log "[*] Activating virtual environment..."
 # shellcheck disable=SC1090
+# The activate script is generated by `python -m venv` and lives under .venv.
+# We source it to put the venv's `python` and `pip` at the front of PATH.
 source "${VENV_DIR}/bin/activate"
 
-echo "[*] Upgrading pip..."
+log "[*] Upgrading pip..."
+# Keeping pip up-to-date avoids many dependency resolution issues, especially
+# on fresh environments or CI runners.
 pip install --upgrade pip
 
-echo "[*] Installing root requirements..."
+log "[*] Installing project requirements (Django app + security tooling)..."
+# All Python dependencies (Django app + security tooling) are defined in the
+# single root `requirements.txt` file.
 pip install -r "${PROJECT_ROOT}/requirements.txt"
 
-echo "[*] Installing Django app requirements..."
-pip install -r "${PROJECT_ROOT}/ca2_secure_website/requirements.txt"
-
-echo "[*] Installing security tooling (Bandit, requests, ZAP client)..."
-pip install bandit requests python-owasp-zap-v2.4
-
-echo "[*] Applying initial Django migrations and seeding demo data (SQLite)..."
+log "[*] Applying initial Django migrations and seeding demo data (SQLite)..."
+# Move into the Django project directory so `manage.py` commands run correctly.
 cd "${PROJECT_ROOT}/ca2_secure_website"
+
+# Create/align database schema for the `app` Django application.
 python manage.py makemigrations app
 python manage.py migrate
+
+# Load a set of demo users/accounts/transactions so the banking app is usable
+# immediately after setup.
 python manage.py seed_demo_data
 
-echo "[*] Running Django tests in SECURE mode..."
+log "[*] Running Django tests in SECURE mode..."
+# USE_SQLITE=1 forces use of the SQLite configuration; SECURE_MODE=secure
+# enables all the hardened paths in the Django settings/views.
 USE_SQLITE=1 SECURE_MODE=secure python manage.py test
 
-echo "[*] Running Django tests in INSECURE mode (Task 2 integration uses TEST_MODE)..."
+log "[*] Running Django tests in INSECURE mode (Task 2 integration uses TEST_MODE)..."
+# INSECURE mode intentionally turns off protections (raw SQL, missing CSRF, etc.)
+# for teaching/demo purposes. TEST_MODE=insecure ensures Task 2 integration tests
+# hit the insecure path when they need to.
 USE_SQLITE=1 SECURE_MODE=insecure TEST_MODE=insecure python manage.py test
 
-echo "[*] Building and starting Docker environment..."
+log "[*] Building and starting Docker environment..."
+# Switch to the Docker folder where `docker-compose.yml` lives.
 cd "${PROJECT_ROOT}/docker"
+
+# Verify Docker and Docker Compose v2 are available before attempting to use them.
+require_cmd docker
+if ! docker compose version >/dev/null 2>&1; then
+  log_err "[!] 'docker compose' command not available. Please install Docker Compose v2."
+  exit 1
+fi
+
+# Build the Docker images and start the stack (web + db) in the background.
 docker compose up -d --build
 
-echo "[*] Running Django tests inside Docker (secure and insecure)..."
+log "[*] Running Django tests inside Docker (secure and insecure)..."
+# These commands run the Django test suite **inside** the web container.
+# `--rm` ensures the ephemeral container is removed after each test run.
 docker compose run --rm -e SECURE_MODE=secure web python manage.py test
 docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
 
-echo "[*] Stopping Docker containers and cleaning volumes..."
-docker compose down -v
-
-echo "[*] All setup, tests, and Docker checks completed successfully."
-echo "[*] To run the app locally (outside Docker) in secure mode:"
-echo "    cd \"${PROJECT_ROOT}/ca2_secure_website\" && USE_SQLITE=1 SECURE_MODE=secure python manage.py runserver 127.0.0.1:8001"
+log "[*] All setup, tests, and Docker checks completed successfully."
+log "[*] The Docker stack (web + db) is still running."
+log "[*] To stop containers and clean volumes later, run:"
+log "    cd \"${PROJECT_ROOT}/docker\" && docker compose down -v"
+log
+log "[*] To run the app locally (outside Docker) in secure mode:"
+log "    cd \"${PROJECT_ROOT}/ca2_secure_website\" && USE_SQLITE=1 SECURE_MODE=secure python manage.py runserver 127.0.0.1:8001"
 

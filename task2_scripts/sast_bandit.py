@@ -1,17 +1,27 @@
 """
-Wrapper script around Bandit (SAST) for the CA2 Django project.
+Advanced Bandit SAST wrapper for the CA2 secure scripting project.
 
-This script runs Bandit against the Django source tree and:
+This script runs Bandit against the Django codebase (or any Python target) and:
 
 - Writes a full JSON report that can be stored as evidence for CA2.
-- Prints a concise human-readable summary to STDOUT.
+- Optionally writes a text summary log and an Excel workbook of findings
+  (one row per issue) under a structured `logs/` hierarchy with automatic,
+  non-overwriting filenames.
+- Prints a concise human-readable summary to STDOUT, including total issues,
+  HIGH/MEDIUM/LOW counts and lines of code analysed.
 - Supports a logical "mode" switch used in this project:
   - In **insecure** mode we show all Bandit findings as-is.
-  - In **secure** mode we filter out intentional demo/vulnerable code so that
-    the summary illustrates a clean run for comparison in reports.
+  - In **secure** mode we filter out intentionally vulnerable teaching code so
+    that the summary illustrates a "clean" run for comparison in reports.
+- Adds an approximate OWASP Top 10 classification based on Bandit test IDs so
+  you can talk about categories (e.g. Injection, Cryptographic Failures,
+  Security Misconfiguration) rather than raw Bandit IDs only.
+- Provides a `--summary-only` mode for quick local checks that prints only the
+  console summary (including OWASP mapping) without writing any artefacts.
+- Supports CI-friendly exit codes via `--fail-on-high` and `--fail-on-medium`
+  so the pipeline can fail on serious SAST findings while still generating
+  evidence reports.
 
-The filtering behaviour is strictly for teaching: in a real production system
-you would *never* hide Bandit findings this way.
 """
 
 import argparse
@@ -19,7 +29,40 @@ import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+
+# Approximate mapping from Bandit test IDs or patterns to OWASP Top 10 2021
+# categories. This is intentionally simplified and geared towards teaching /
+# reporting rather than exact compliance.
+OWASP_BANDIT_MAP: Dict[str, List[str]] = {
+    # Hardcoded passwords / secrets / keys.
+    "B105": ["A02:2021-Cryptographic Failures"],
+    "B106": ["A02:2021-Cryptographic Failures"],
+    "B107": ["A02:2021-Cryptographic Failures"],
+    "B108": ["A02:2021-Cryptographic Failures"],
+    "B109": ["A02:2021-Cryptographic Failures"],
+    # Use of eval/exec or dynamic code.
+    "B102": ["A03:2021-Injection"],
+    "B301": ["A03:2021-Injection"],
+    "B302": ["A03:2021-Injection"],
+    # SQL injection, OS command injection, subprocess with shell=True, etc.
+    "B608": ["A03:2021-Injection"],
+    "B609": ["A03:2021-Injection"],
+    "B604": ["A03:2021-Injection"],
+    "B607": ["A03:2021-Injection"],
+    # Unsafe deserialisation, XML vulnerabilities.
+    "B301-xml": ["A08:2021-Software and Data Integrity Failures"],
+    "B314": ["A08:2021-Software and Data Integrity Failures"],
+    # Insecure SSL/TLS usage.
+    "B501": ["A02:2021-Cryptographic Failures"],
+    "B502": ["A02:2021-Cryptographic Failures"],
+    # Use of weak hashing algorithms.
+    "B303": ["A02:2021-Cryptographic Failures"],
+    "B304": ["A02:2021-Cryptographic Failures"],
+    # General misconfiguration / debugging.
+    "B101": ["A05:2021-Security Misconfiguration"],
+}
 
 
 def run_bandit(
@@ -128,6 +171,28 @@ def print_summary(report: Dict[str, Any]) -> None:
         loc = metrics.get("__totals__", {}).get("loc", 0)
         print(f"    Lines of code analysed: {loc}")
 
+    # Approximate OWASP Top 10 classification based on Bandit test IDs. This
+    # gives a higher-level view suitable for reports and CA2 commentary.
+    category_counts: Dict[str, int] = {}
+    for r in results:
+        test_id = str(r.get("test_id", "") or "")
+        owasp_categories: List[str] = []
+        if test_id in OWASP_BANDIT_MAP:
+            owasp_categories = OWASP_BANDIT_MAP[test_id]
+        # Allow for simple pattern-based mapping if needed.
+        elif "xml" in str(r.get("test_name", "")).lower():
+            owasp_categories = OWASP_BANDIT_MAP.get("B301-xml", [])
+
+        for cat in owasp_categories:
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    if category_counts:
+        print("    OWASP Top 10 signals (approximate):")
+        for cat, count in sorted(
+            category_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        ):
+            print(f"      - {cat}: {count}")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -161,6 +226,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help=(
+            "Only print a console summary; do not write JSON/Excel/log files. "
+            "Useful for quick local checks."
+        ),
+    )
+    parser.add_argument(
         "--fail-on-high",
         action="store_true",
         help="Exit with non-zero status if any HIGH severity issues are found.",
@@ -178,40 +251,46 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     target = Path(args.path).resolve()
-    output = Path(args.output_json).resolve()
 
-    # Decide whether to use the automatic naming scheme. This applies when
-    # --auto is set *or* when the caller leaves --output-json at its default
-    # value, so that we avoid littering the project root with bandit_report.json.
-    use_auto_naming = args.auto or args.output_json == "bandit_report.json"
-
+    # In summary-only mode we do not write any artefacts; we just run Bandit
+    # and print the summary. This is handy for fast local checks.
+    output: Optional[Path] = None
     log_path: Optional[Path] = None
     excel_path: Optional[Path] = None
-    if use_auto_naming:
-        date_str = datetime.now().strftime("%d%m%y")
-        # Use the last path component (without extension for files) as the
-        # base name, so paths like task2_scripts/bandit_demo_target.py become
-        # bandit_demo_target_bandit_<ddmmyy>.*
-        if target.is_file():
-            base_name = target.stem
-        else:
-            base_name = target.name
 
-        json_dir = Path("logs") / "json_logs"
-        base_stem = f"{base_name}_bandit_{date_str}"
+    if not args.summary_only:
+        # Decide whether to use the automatic naming scheme. This applies when
+        # --auto is set *or* when the caller leaves --output-json at its default
+        # value, so that we avoid littering the project root with bandit_report.json.
+        use_auto_naming = args.auto or args.output_json == "bandit_report.json"
 
-        # Find a free suffix (", (1)", (2), ...) based on the JSON path so that
-        # multiple runs on the same day do not overwrite each other.
-        suffix = ""
-        output = json_dir / f"{base_stem}.json"
-        counter = 1
-        while output.exists():
-            suffix = f"({counter})"
-            output = json_dir / f"{base_stem}{suffix}.json"
-            counter += 1
+        output = Path(args.output_json).resolve()
 
-        log_path = Path("logs") / f"{base_stem}{suffix}.log"
-        excel_path = Path("logs") / "excel" / f"{base_stem}{suffix}.xlsx"
+        if use_auto_naming:
+            date_str = datetime.now().strftime("%d%m%y")
+            # Use the last path component (without extension for files) as the
+            # base name, so paths like task2_scripts/bandit_demo_target.py become
+            # bandit_demo_target_bandit_<ddmmyy>.*
+            if target.is_file():
+                base_name = target.stem
+            else:
+                base_name = target.name
+
+            json_dir = Path("logs") / "json_logs"
+            base_stem = f"{base_name}_bandit_{date_str}"
+
+            # Find a free suffix (", (1)", (2), ...) based on the JSON path so that
+            # multiple runs on the same day do not overwrite each other.
+            suffix = ""
+            output = json_dir / f"{base_stem}.json"
+            counter = 1
+            while output.exists():
+                suffix = f"({counter})"
+                output = json_dir / f"{base_stem}{suffix}.json"
+                counter += 1
+
+            log_path = Path("logs") / f"{base_stem}{suffix}.log"
+            excel_path = Path("logs") / "excel" / f"{base_stem}{suffix}.xlsx"
 
     report = run_bandit(target, output, log_path=log_path, excel_path=excel_path)
 
