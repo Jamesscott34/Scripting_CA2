@@ -2,7 +2,6 @@
 
 [![CA2 CI Status](https://github.com/jamesscott34/Scripting_CA2/actions/workflows/CA2.yaml/badge.svg)](https://github.com/jamesscott34/Scripting_CA2/actions/workflows/CA2.yaml)
 
-> Replace `<your-github-username>` with your actual GitHub username to enable the badge.
 
 This repository contains the **CA2 Secure Programming & Scripting** project:
 
