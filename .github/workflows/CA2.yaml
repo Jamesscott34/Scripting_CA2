@@ -70,7 +70,10 @@ jobs:
       - name: Generate SBOM (CycloneDX for pip)
         run: |
           pip install cyclonedx-bom
-          cyclonedx-py -j -o logs/sbom_python.json
+          mkdir -p logs
+          # Generate an SBOM for the current Python environment.
+          # 'env' is an alias for 'environment' in cyclonedx-py.
+          cyclonedx-py env -o logs/sbom_python.json
 
       # 7) Run Django tests against a fresh SQLite database in SECURE mode.
       #    SECURE_MODE=secure enables all protections; TEST_MODE=secure ensures
