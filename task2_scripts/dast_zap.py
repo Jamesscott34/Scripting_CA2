@@ -37,6 +37,10 @@ import requests
 from zapv2 import ZAPv2
 
 
+SCRIPT_ROOT = Path(__file__).resolve().parent
+LOGS_ROOT = SCRIPT_ROOT / "logs"
+
+
 # Approximate mapping from common ZAP alert names to OWASP Top 10 2021
 # categories. This is intentionally simplified and designed for reporting /
 # teaching purposes rather than exact compliance.
@@ -610,7 +614,7 @@ def main() -> None:
         safe_host = host.replace(":", "_").replace(".", "_")
         date_str = datetime.now().strftime("%d%m%y")
         if output_base is None:
-            output_base = Path("logs") / "zap_reports" / f"zap_{safe_host}_{date_str}"
+            output_base = LOGS_ROOT / "zap_reports" / f"zap_{safe_host}_{date_str}"
         if not formats:
             formats = ["json", "html", "md", "xlsx"]
 

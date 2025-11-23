@@ -32,9 +32,16 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 
+SCRIPT_ROOT = Path(__file__).resolve().parent
+LOGS_ROOT = SCRIPT_ROOT / "logs"
+
+
 # Approximate mapping from Bandit test IDs or patterns to OWASP Top 10 2021
 # categories. This is intentionally simplified and geared towards teaching /
-# reporting rather than exact compliance.
+# reporting rather than exact compliance. Bandit itself still runs its full
+# built-in test suite – this mapping is only used to GROUP findings in
+# summaries. For the complete list of Bandit plugins, see:
+# https://bandit.readthedocs.io/en/latest/plugins/index.html
 OWASP_BANDIT_MAP: Dict[str, List[str]] = {
     # Hardcoded passwords / secrets / keys.
     "B105": ["A02:2021-Cryptographic Failures"],
@@ -42,26 +49,61 @@ OWASP_BANDIT_MAP: Dict[str, List[str]] = {
     "B107": ["A02:2021-Cryptographic Failures"],
     "B108": ["A02:2021-Cryptographic Failures"],
     "B109": ["A02:2021-Cryptographic Failures"],
+    "B110": ["A02:2021-Cryptographic Failures"],  # hardcoded temp dirs / similar
+
     # Use of eval/exec or dynamic code.
     "B102": ["A03:2021-Injection"],
-    "B301": ["A03:2021-Injection"],
-    "B302": ["A03:2021-Injection"],
-    # SQL injection, OS command injection, subprocess with shell=True, etc.
+    "B307": ["A03:2021-Injection"],  # eval
+    "B308": ["A03:2021-Injection"],  # mark_safe / template injection
+
+    # SQL / OS command injection, subprocess with shell=True, etc.
+    "B602": ["A03:2021-Injection"],
+    "B603": ["A03:2021-Injection"],
+    "B604": ["A03:2021-Injection"],
+    "B605": ["A03:2021-Injection"],
+    "B606": ["A03:2021-Injection"],
+    "B607": ["A03:2021-Injection"],
     "B608": ["A03:2021-Injection"],
     "B609": ["A03:2021-Injection"],
-    "B604": ["A03:2021-Injection"],
-    "B607": ["A03:2021-Injection"],
-    # Unsafe deserialisation, XML vulnerabilities.
+
+    # Unsafe deserialisation, XML, and data integrity.
+    "B201": ["A08:2021-Software and Data Integrity Failures"],  # pickle
+    "B301": ["A08:2021-Software and Data Integrity Failures"],
+    "B302": ["A08:2021-Software and Data Integrity Failures"],
     "B301-xml": ["A08:2021-Software and Data Integrity Failures"],
     "B314": ["A08:2021-Software and Data Integrity Failures"],
-    # Insecure SSL/TLS usage.
+    "B403": ["A08:2021-Software and Data Integrity Failures"],
+    "B404": ["A08:2021-Software and Data Integrity Failures"],
+    "B405": ["A08:2021-Software and Data Integrity Failures"],
+    "B406": ["A08:2021-Software and Data Integrity Failures"],
+    "B407": ["A08:2021-Software and Data Integrity Failures"],
+    "B408": ["A08:2021-Software and Data Integrity Failures"],
+    "B409": ["A08:2021-Software and Data Integrity Failures"],
+
+    # Insecure SSL/TLS usage and weak crypto.
     "B501": ["A02:2021-Cryptographic Failures"],
     "B502": ["A02:2021-Cryptographic Failures"],
-    # Use of weak hashing algorithms.
+    "B503": ["A02:2021-Cryptographic Failures"],
+    "B504": ["A02:2021-Cryptographic Failures"],
+    "B505": ["A02:2021-Cryptographic Failures"],
+    "B506": ["A02:2021-Cryptographic Failures"],
+    "B507": ["A02:2021-Cryptographic Failures"],
+    "B508": ["A02:2021-Cryptographic Failures"],
+
+    # Use of weak hashing algorithms / weak PRNG / low-entropy secrets.
     "B303": ["A02:2021-Cryptographic Failures"],
     "B304": ["A02:2021-Cryptographic Failures"],
-    # General misconfiguration / debugging.
+    "B305": ["A02:2021-Cryptographic Failures"],
+    "B306": ["A02:2021-Cryptographic Failures"],
+    "B311": ["A02:2021-Cryptographic Failures"],
+
+    # General misconfiguration / debugging / assert / dangerous stdlib.
     "B101": ["A05:2021-Security Misconfiguration"],
+    "B104": ["A05:2021-Security Misconfiguration"],
+    "B310": ["A05:2021-Security Misconfiguration"],  # urllib/requests without TLS verify
+    "B312": ["A05:2021-Security Misconfiguration"],  # telnetlib
+    "B313": ["A05:2021-Security Misconfiguration"],
+    "B320": ["A05:2021-Security Misconfiguration"],
 }
 
 
@@ -100,16 +142,93 @@ def run_bandit(
 
     if log_path is not None:
         results = data.get("results", [])
+        metrics = data.get("metrics", {}) or {}
         high = sum(1 for r in results if r.get("issue_severity") == "HIGH")
         medium = sum(1 for r in results if r.get("issue_severity") == "MEDIUM")
         low = sum(1 for r in results if r.get("issue_severity") == "LOW")
         timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+        # Derive approximate OWASP Top 10 categories for each result so the log
+        # file is self-contained and mirrors the JSON/Excel detail. For unknown
+        # test IDs we fall back to simple heuristics based on the test name and
+        # issue text so that new Bandit checks still land in a sensible bucket.
+        def _owasp_for_result(r: Dict[str, Any]) -> List[str]:
+            test_id = str(r.get("test_id", "") or "")
+            test_name = str(r.get("test_name", "") or "").lower()
+            text = str(r.get("issue_text", "") or "").lower()
+
+            if test_id in OWASP_BANDIT_MAP:
+                return OWASP_BANDIT_MAP[test_id]
+
+            # Heuristic fallbacks.
+            if "xml" in test_name or "xml" in text:
+                return OWASP_BANDIT_MAP.get("B301-xml", [])
+            if "pickle" in test_name or "pickle" in text:
+                return OWASP_BANDIT_MAP.get("B201", [])
+            if test_id.startswith("B6") or "subprocess" in text or "shell" in text:
+                return OWASP_BANDIT_MAP.get("B604", [])
+            if any(k in text for k in ("ssl", "tls", "certificate", "cert ")):
+                return OWASP_BANDIT_MAP.get("B501", [])
+            if any(k in text for k in ("md5", "sha1", "sha-1")):
+                return OWASP_BANDIT_MAP.get("B303", [])
+            return []
+
+        # Build a per-file severity summary based on Bandit's metrics so that
+        # even files with zero issues are visible in the log.
+        per_file_lines: List[str] = []
+        file_keys = [
+            path for path in metrics.keys() if not str(path).startswith("_")
+        ]
+        for fname in sorted(file_keys):
+            m = metrics.get(fname, {}) or {}
+            fh = int(m.get("SEVERITY.HIGH", 0) or 0)
+            fm = int(m.get("SEVERITY.MEDIUM", 0) or 0)
+            fl = int(m.get("SEVERITY.LOW", 0) or 0)
+            total_file = fh + fm + fl
+            if total_file:
+                per_file_lines.append(
+                    f"  {fname}: HIGH={fh}, MEDIUM={fm}, LOW={fl}"
+                )
+            else:
+                per_file_lines.append(f"  {fname}: no issues found")
+
+        lines: List[str] = [
+            f"Timestamp: {timestamp}",
+            f"Target: {target_path}",
+            f"Total issues: {len(results)} (HIGH={high}, MEDIUM={medium}, LOW={low})",
+            "",
+        ]
+        if per_file_lines:
+            lines.append("Per-file severity summary:")
+            lines.extend(per_file_lines)
+            lines.append("")
+
+        for idx, r in enumerate(results, start=1):
+            owasp_cats = _owasp_for_result(r)
+            lines.append(f"Issue {idx}:")
+            lines.append(
+                f"  Severity={r.get('issue_severity')}, "
+                f"Confidence={r.get('issue_confidence')}, "
+                f"Bandit={r.get('test_id')} ({r.get('test_name')})"
+            )
+            lines.append(
+                f"  Location={r.get('filename')}:{r.get('line_number')}"
+            )
+            lines.append(f"  Text={r.get('issue_text')}")
+            if owasp_cats:
+                lines.append(
+                    "  OWASP="
+                    + ", ".join(sorted(set(str(c) for c in owasp_cats)))
+                )
+            code_snippet = r.get("code")
+            if code_snippet:
+                lines.append("  Code:")
+                for code_line in str(code_snippet).rstrip("\n").splitlines():
+                    lines.append(f"    {code_line}")
+            lines.append("")  # blank line between issues
+
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            f"Timestamp: {timestamp}\n"
-            f"Target: {target_path}\n"
-            f"Total issues: {len(results)} (HIGH={high}, MEDIUM={medium}, LOW={low})\n"
-        )
+        log_path.write_text("\n".join(lines))
         print(f"[+] Text summary log written to {log_path}")
 
     if excel_path is not None:
@@ -156,7 +275,7 @@ def run_bandit(
 
 def print_summary(report: Dict[str, Any]) -> None:
     results = report.get("results", [])
-    metrics = report.get("metrics", {})
+    metrics = report.get("metrics", {}) or {}
     total = len(results)
     high = sum(1 for r in results if r.get("issue_severity") == "HIGH")
     medium = sum(1 for r in results if r.get("issue_severity") == "MEDIUM")
@@ -174,14 +293,30 @@ def print_summary(report: Dict[str, Any]) -> None:
     # Approximate OWASP Top 10 classification based on Bandit test IDs. This
     # gives a higher-level view suitable for reports and CA2 commentary.
     category_counts: Dict[str, int] = {}
-    for r in results:
+    # Reuse the same heuristic mapping logic as the text log writer so that
+    # console and logs stay in sync.
+    def _owasp_for_result(r: Dict[str, Any]) -> List[str]:
         test_id = str(r.get("test_id", "") or "")
-        owasp_categories: List[str] = []
+        test_name = str(r.get("test_name", "") or "").lower()
+        text = str(r.get("issue_text", "") or "").lower()
+
         if test_id in OWASP_BANDIT_MAP:
-            owasp_categories = OWASP_BANDIT_MAP[test_id]
-        # Allow for simple pattern-based mapping if needed.
-        elif "xml" in str(r.get("test_name", "")).lower():
-            owasp_categories = OWASP_BANDIT_MAP.get("B301-xml", [])
+            return OWASP_BANDIT_MAP[test_id]
+
+        if "xml" in test_name or "xml" in text:
+            return OWASP_BANDIT_MAP.get("B301-xml", [])
+        if "pickle" in test_name or "pickle" in text:
+            return OWASP_BANDIT_MAP.get("B201", [])
+        if test_id.startswith("B6") or "subprocess" in text or "shell" in text:
+            return OWASP_BANDIT_MAP.get("B604", [])
+        if any(k in text for k in ("ssl", "tls", "certificate", "cert ")):
+            return OWASP_BANDIT_MAP.get("B501", [])
+        if any(k in text for k in ("md5", "sha1", "sha-1")):
+            return OWASP_BANDIT_MAP.get("B303", [])
+        return []
+
+    for r in results:
+        owasp_categories = _owasp_for_result(r)
 
         for cat in owasp_categories:
             category_counts[cat] = category_counts.get(cat, 0) + 1
@@ -192,6 +327,26 @@ def print_summary(report: Dict[str, Any]) -> None:
             category_counts.items(), key=lambda kv: (-kv[1], kv[0])
         ):
             print(f"      - {cat}: {count}")
+
+    # Per-file severity summary based on Bandit's metrics so you can see which
+    # files are clean and which carry risk.
+    file_keys = [
+        path for path in metrics.keys() if not str(path).startswith("_")
+    ]
+    if file_keys:
+        print("\n[+] Per-file severity summary")
+        for fname in sorted(file_keys):
+            m = metrics.get(fname, {}) or {}
+            fh = int(m.get("SEVERITY.HIGH", 0) or 0)
+            fm = int(m.get("SEVERITY.MEDIUM", 0) or 0)
+            fl = int(m.get("SEVERITY.LOW", 0) or 0)
+            total_file = fh + fm + fl
+            if total_file:
+                print(
+                    f"    {fname}: HIGH={fh}, MEDIUM={fm}, LOW={fl}"
+                )
+            else:
+                print(f"    {fname}: no issues found")
 
 
 class _HelperCallable:
@@ -297,7 +452,7 @@ def main() -> None:
             else:
                 base_name = target.name
 
-            json_dir = Path("logs") / "json_logs"
+            json_dir = LOGS_ROOT / "json_logs"
             base_stem = f"{base_name}_bandit_{date_str}"
 
             # Find a free suffix (", (1)", (2), ...) based on the JSON path so that
@@ -310,8 +465,8 @@ def main() -> None:
                 output = json_dir / f"{base_stem}{suffix}.json"
                 counter += 1
 
-            log_path = Path("logs") / f"{base_stem}{suffix}.log"
-            excel_path = Path("logs") / "excel" / f"{base_stem}{suffix}.xlsx"
+            log_path = LOGS_ROOT / f"{base_stem}{suffix}.log"
+            excel_path = LOGS_ROOT / "excel" / f"{base_stem}{suffix}.xlsx"
 
     report = run_bandit(target, output, log_path=log_path, excel_path=excel_path)
 

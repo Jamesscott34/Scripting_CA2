@@ -48,6 +48,9 @@ from urllib.parse import urlparse
 
 import requests
 
+SCRIPT_ROOT = Path(__file__).resolve().parent
+LOGS_ROOT = SCRIPT_ROOT / "logs"
+
 # Default endpoints to fuzz when running in full automatic mode. These are
 # chosen to work well with the CA2 banking application but are also sensible
 # guesses for many generic web applications.
@@ -726,13 +729,13 @@ def fuzz_endpoint(
 
     if write_files:
         # Always ensure a logs directory for human-readable logs.
-        logs_dir = Path("logs")
+        logs_dir = LOGS_ROOT
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / f"fuzz_{safe_host}_{safe_path}_{date_str}{mode_suffix}{category_suffix}.log"
 
         # If no JSON directory was provided, default to logs/json_logs.
         if output_json is None:
-            output_dir = Path("logs") / "json_logs"
+            output_dir = LOGS_ROOT / "json_logs"
         else:
             # Treat output_json as a directory hint; if it includes a filename
             # (e.g. ends with .json), we use its parent as the directory instead.
@@ -1236,7 +1239,7 @@ def main() -> None:
         safe_host = host.replace(":", "_").replace(".", "_")
         date_str = datetime.now().strftime("%d%m%y")
 
-        aggregate_dir = Path("logs") / "json_logs"
+        aggregate_dir = LOGS_ROOT / "json_logs"
         aggregate_dir.mkdir(parents=True, exist_ok=True)
         aggregate_json_path = aggregate_dir / f"fuzz_all_{safe_host}_{date_str}.json"
 
@@ -1249,7 +1252,7 @@ def main() -> None:
         print(f"[+] Aggregate JSON report written to {aggregate_json_path}")
 
         # Aggregate text log with a short summary per run.
-        log_dir = Path("logs")
+        log_dir = LOGS_ROOT
         log_dir.mkdir(parents=True, exist_ok=True)
         aggregate_log_path = log_dir / f"fuzz_all_{safe_host}_{date_str}.log"
 
@@ -1286,7 +1289,7 @@ def main() -> None:
         try:
             from openpyxl import Workbook  # type: ignore
 
-            excel_dir = Path("logs") / "excel"
+            excel_dir = LOGS_ROOT / "excel"
             excel_dir.mkdir(parents=True, exist_ok=True)
             excel_path = excel_dir / f"fuzz_all_{safe_host}_{date_str}.xlsx"
 
