@@ -17,23 +17,49 @@ Jinja2 templates, and a small set of routes aligned with the Django app:
 - `/search` – search a user's transactions.
 
 The **root** `requirements.txt` is used for Docker builds; the containers then
-install Flask (and Werkzeug for the secure app) on top.
+install Flask (and Werkzeug for the secure app) on top. For local Flask-only
+development this folder also contains its own `requirements.txt` which mirrors
+the root file and adds Flask-specific dependencies.
 
 ---
 
-### Running locally (without Docker)
+### One-time setup for the Flask apps (virtualenv)
 
 From the repository root:
 
 ```bash
+cd flask
+chmod +x setup.sh
+./setup.sh
+```
+
+This will:
+
+- Create a local virtualenv in `flask/.venv` (if it does not already exist).
+- Install dependencies from `flask/requirements.txt`.
+
+You can then either activate the environment:
+
+```bash
+cd flask
+source .venv/bin/activate
+```
+
+or call the Python binary explicitly as shown below.
+
+---
+
+### Running locally (without Docker, after setup)
+
+```bash
 # Insecure Flask app (port 5000)
 cd flask/insecure_flask_app
-python app.py
+../.venv/bin/python app.py
 
 # Secure Flask app (port 5001)
 cd ../secure_flask_app
 export SECURE_FLASK_SECRET="change-me-to-a-long-random-value"
-python app.py
+../.venv/bin/python app.py
 ```
 
 Then visit:

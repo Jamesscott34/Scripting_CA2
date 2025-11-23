@@ -1,0 +1,12 @@
+django
+djangorestframework
+bandit
+requests
+python-owasp-zap-v2.4
+openpyxl
+psycopg2-binary
+pytest
+flask
+werkzeug
+
+
