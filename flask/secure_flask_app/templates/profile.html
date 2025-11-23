@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Profile</h1>
+
+  <p>Logged in as <strong>{{ user.username }}</strong></p>
+  <p>Current balance: <strong>{{ "%.2f"|format(user.balance) }}</strong></p>
+
+  <h2>Add transaction / note</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+      <label for="amount">Amount (can be negative)</label>
+      <input id="amount" name="amount" type="text" value="0">
+    </div>
+    <div>
+      <label for="message">Message / description</label>
+      <input id="message" name="message" type="text" maxlength="255">
+    </div>
+    <button type="submit">Submit</button>
+  </form>
+
+  <h2>Recent transactions</h2>
+  {% if transactions %}
+    <ul>
+      {% for tx in transactions %}
+        <li>
+          <strong>{{ "%.2f"|format(tx.amount) }}</strong> –
+          {{ tx.message }} ({{ tx.created_at }})
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No transactions yet.</p>
+  {% endif %}
+{% endblock %}
+
+
