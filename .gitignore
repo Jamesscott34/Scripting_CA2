@@ -11,4 +11,6 @@ __pycache__/
 logs/*
 CA2_Project_Overview.md
 task2_scripts/report_samples/*
+/flask_website/insecure_flask_app/insecure.db
+/flask_website/secure_flask_app/secure.db
 
