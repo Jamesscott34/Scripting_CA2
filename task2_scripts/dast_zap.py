@@ -43,7 +43,6 @@ LOGS_ROOT = SCRIPT_ROOT / "logs"
 
 # Approximate mapping from common ZAP alert names to OWASP Top 10 2021
 # categories. This is intentionally simplified and designed for reporting /
-# teaching purposes rather than exact compliance.
 OWASP_ZAP_MAP: Dict[str, List[str]] = {
     # Cross-Site Scripting variants.
     "cross site scripting": ["A03:2021-Injection (XSS)"],
@@ -84,42 +83,22 @@ def is_zap_reachable(api_key: str, host: str, port: int) -> bool:
 
     try:
         zap = _zap_client(api_key, host, port)
-        _ = zap.core.version()
-        return True
+        # Different versions of the python ZAP client expose ``core.version`` as
+        # either a *callable* (method) or a simple property that already
+        # contains a string.  In some environments calling it unconditionally
+        # (``zap.core.version()``) results in ``TypeError: 'str' object is not
+        # callable`` even though the API is actually reachable.
+        #
+        # To keep this helper robust we support both styles:
+        #
+        # - If ``zap.core.version`` is callable, invoke it.
+        # - Otherwise treat the attribute value as the version string.
+        version_attr = zap.core.version  # type: ignore[assignment]
+        version = version_attr() if callable(version_attr) else version_attr
+        # Any non-empty response here is enough to treat ZAP as "reachable".
+        return bool(version)
     except Exception:
         return False
-
-
-def start_zap_docker(image: str, port: int, container_name: str) -> None:
-    """Attempt to start a ZAP daemon in Docker for automation."""
-
-    print(f"[+] Attempting to start ZAP Docker container '{container_name}' on port {port}...")
-    subprocess.run(
-        [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            container_name,
-            "-p",
-            f"{port}:{port}",
-            image,
-            "zap.sh",
-            "-daemon",
-            "-port",
-            str(port),
-            "-config",
-            "api.disablekey=true",
-        ],
-        check=False,
-    )
-
-
-def stop_zap_docker(container_name: str) -> None:
-    """Best-effort helper to stop and remove the ZAP Docker container."""
-
-    print(f"[+] Stopping ZAP Docker container '{container_name}'...")
-    subprocess.run(["docker", "rm", "-f", container_name], check=False)
 
 
 def check_target_available(target: str, insecure: bool) -> bool:
@@ -167,6 +146,10 @@ def run_dast(
     login_url: Optional[str] = None,
     login_username: Optional[str] = None,
     login_password: Optional[str] = None,
+    auth_users: Optional[List[str]] = None,
+    protected_paths: Optional[List[str]] = None,
+    enable_rules: Optional[List[str]] = None,
+    disable_rules: Optional[List[str]] = None,
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
     poll_delay: float = 2.0,
@@ -197,9 +180,36 @@ def run_dast(
         zap.spider.exclude_from_scan(pattern)
         zap.ascan.exclude_from_scan(pattern)
 
-    # Optional form-based authentication.
-    user_id: Optional[str] = None
-    if login_url and login_username and login_password:
+    # Optional scan rule tuning: enable/disable specific active scan plugin IDs.
+    def _flatten_rule_ids(values: Optional[List[str]]) -> str:
+        if not values:
+            return ""
+        ids: List[str] = []
+        for token in values:
+            for part in token.split(","):
+                part = part.strip()
+                if part and part not in ids:
+                    ids.append(part)
+        return ",".join(ids)
+
+    enable_ids = _flatten_rule_ids(enable_rules)
+    disable_ids = _flatten_rule_ids(disable_rules)
+    if enable_ids:
+        try:
+            print(f"[+] Enabling active scan rules (plugin IDs): {enable_ids}")
+            zap.ascan.enable_scanners(enable_ids)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[!] Failed to enable rules {enable_ids}: {exc}")
+    if disable_ids:
+        try:
+            print(f"[+] Disabling active scan rules (plugin IDs): {disable_ids}")
+            zap.ascan.disable_scanners(disable_ids)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[!] Failed to disable rules {disable_ids}: {exc}")
+
+    # Optional form-based authentication (supporting multiple users/roles).
+    user_ids: List[str] = []
+    if login_url and (login_username and login_password or auth_users):
         print(f"[+] Configuring form-based authentication via {login_url}...")
         if login_url.startswith("http://") or login_url.startswith("https://"):
             login_full = login_url
@@ -220,38 +230,84 @@ def run_dast(
             context_id, "Logout|logout"
         )
 
-        # Create a user within this context.
-        user_id = zap.users.new_user(context_id, "ca2-user")
-        zap.users.set_credentials(
-            context_id,
-            user_id,
-            f"username={login_username}&password={login_password}",
-        )
-        zap.users.set_user_enabled(context_id, user_id, "true")
-        zap.forcedUser.set_forced_user(context_id, user_id)
-        zap.forcedUser.set_forced_user_mode_enabled("true")
-        print(f"[+] Authentication configured for user id {user_id}.")
+        # Build list of (username, password) pairs.
+        credentials: List[tuple[str, str]] = []
+        if login_username and login_password:
+            credentials.append((login_username, login_password))
+        for raw in auth_users or []:
+            if ":" not in raw:
+                print(
+                    f"[!] Skipping invalid auth user '{raw}' "
+                    "(expected format username:password)."
+                )
+                continue
+            u, p = raw.split(":", 1)
+            u, p = u.strip(), p.strip()
+            if not u or not p:
+                print(
+                    f"[!] Skipping invalid auth user '{raw}' "
+                    "(empty username or password)."
+                )
+                continue
+            credentials.append((u, p))
+
+        for idx, (u, p) in enumerate(credentials, start=1):
+            user_name = f"ca2-user-{idx}"
+            uid = zap.users.new_user(context_id, user_name)
+            zap.users.set_credentials(
+                context_id,
+                uid,
+                f"username={u}&password={p}",
+            )
+            zap.users.set_user_enabled(context_id, uid, "true")
+            user_ids.append(uid)
+
+        if user_ids:
+            print(f"[+] Authentication configured for {len(user_ids)} user(s): {user_ids}")
 
     print(f"[+] Accessing target: {target}")
     zap.urlopen(target)
 
+    # Optionally "prime" specific protected paths so they are in scope before
+    # spider/active scan (for example, deep account pages or admin URLs).
+    for path in protected_paths or []:
+        if path.startswith(("http://", "https://")):
+            url = path
+        else:
+            url = target.rstrip("/") + "/" + path.lstrip("/")
+        print(f"[+] Priming protected path: {url}")
+        try:
+            zap.urlopen(url)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[!] Failed to access protected path '{url}': {exc}")
+
     print("[+] Starting spider...")
-    if user_id is not None:
-        scan_id = zap.spider.scan_as_user(context_id, user_id, target)
+    if user_ids:
+        for uid in user_ids:
+            print(f"[+] Spidering as user id {uid}...")
+            scan_id = zap.spider.scan_as_user(context_id, uid, target)
+            while int(zap.spider.status(scan_id)) < 100:
+                print(f"  - Spider progress (user {uid}): {zap.spider.status(scan_id)}%")
+                time.sleep(poll_delay)
     else:
         scan_id = zap.spider.scan(target)
-    while int(zap.spider.status(scan_id)) < 100:
-        print(f"  - Spider progress: {zap.spider.status(scan_id)}%")
-        time.sleep(poll_delay)
+        while int(zap.spider.status(scan_id)) < 100:
+            print(f"  - Spider progress: {zap.spider.status(scan_id)}%")
+            time.sleep(poll_delay)
 
     print("[+] Starting active scan...")
-    if user_id is not None:
-        active_id = zap.ascan.scan_as_user(context_id, user_id, target)
+    if user_ids:
+        for uid in user_ids:
+            print(f"[+] Active scan as user id {uid}...")
+            active_id = zap.ascan.scan_as_user(context_id, uid, target)
+            while int(zap.ascan.status(active_id)) < 100:
+                print(f"  - Active scan progress (user {uid}): {zap.ascan.status(active_id)}%")
+                time.sleep(poll_delay)
     else:
         active_id = zap.ascan.scan(target)
-    while int(zap.ascan.status(active_id)) < 100:
-        print(f"  - Active scan progress: {zap.ascan.status(active_id)}%")
-        time.sleep(poll_delay)
+        while int(zap.ascan.status(active_id)) < 100:
+            print(f"  - Active scan progress: {zap.ascan.status(active_id)}%")
+            time.sleep(poll_delay)
 
     raw_alerts = zap.core.alerts()
     # Apply optional regex-based filtering to remove expected/noisy alerts
@@ -461,21 +517,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to write a JSON report of all ZAP alerts.",
     )
     parser.add_argument(
-        "--auto-docker",
-        action="store_true",
-        help="If set, attempt to start a ZAP Docker container automatically when needed.",
-    )
-    parser.add_argument(
-        "--docker-image",
-        default="owasp/zap2docker-stable",
-        help="Docker image to use when --auto-docker is enabled.",
-    )
-    parser.add_argument(
-        "--docker-container",
-        default="zap-ca2",
-        help="Docker container name to use when --auto-docker is enabled.",
-    )
-    parser.add_argument(
         "--login-url",
         default=None,
         help=(
@@ -494,6 +535,15 @@ def parse_args() -> argparse.Namespace:
         help="Password to use for ZAP form-based authentication.",
     )
     parser.add_argument(
+        "--auth-users",
+        nargs="*",
+        default=None,
+        help=(
+            "Additional authenticated users in the form username:password. "
+            "Requires --login-url. Example: --auth-users alice:pass bob:secret"
+        ),
+    )
+    parser.add_argument(
         "--include",
         nargs="*",
         default=None,
@@ -509,6 +559,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional regex patterns to exclude from the ZAP context and "
             "from spider/active scans (e.g. '/static/.*' '/admin/.*')."
+        ),
+    )
+    parser.add_argument(
+        "--protected-paths",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional list of paths or URLs that should be explicitly "
+            "requested before scanning, e.g. /transfer/ /admin/."
         ),
     )
     parser.add_argument(
@@ -531,6 +590,24 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated list of additional report formats to write when "
             "used with --output-prefix. Supported: json,html,xml,md. "
             "Default: json."
+        ),
+    )
+    parser.add_argument(
+        "--enable-rules",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional list of ZAP active scan plugin IDs to enable before "
+            "scanning. Example: --enable-rules 40012 40018"
+        ),
+    )
+    parser.add_argument(
+        "--disable-rules",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional list of ZAP active scan plugin IDs to disable before "
+            "scanning. Example: --disable-rules 40025 40029"
         ),
     )
     parser.add_argument(
@@ -590,7 +667,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Run a full automatic scan with sensible defaults suitable for "
-            "CA2 demonstrations (auto-Docker, reports under logs/zap_reports, "
+            "CA2 demonstrations (reports under logs/zap_reports, "
             "HTML/JSON/MD outputs, and standard excludes for static/admin paths)."
         ),
     )
@@ -604,10 +681,9 @@ def main() -> None:
     output_base = Path(args.output_prefix) if args.output_prefix else None
     sarif_path = Path(args.sarif_path) if args.sarif_path else None
 
-    # Auto mode: turn on Docker, set a sensible output prefix under logs/zap_reports
-    # and default to multiple formats.
+    # Auto mode: set a sensible output prefix under logs/zap_reports and
+    # default to multiple formats.
     if args.auto:
-        args.auto_docker = True
         # Derive a base name of the form zap_<host>_<ddmmyy> under logs/zap_reports.
         parsed = urlparse(args.target)
         host = parsed.netloc or parsed.path or "target"
@@ -629,69 +705,42 @@ def main() -> None:
     if not check_target_available(args.target, insecure=args.insecure):
         return
 
-    # Check if ZAP is already reachable; if not, either offer auto-Docker or
-    # ask the user to start it manually.
+    # Check if ZAP is already reachable; if not, instruct the user to start it
+    # manually using the official installers (see https://www.zaproxy.org/download)
+    # and getting started guide (https://www.zaproxy.org/getting-started).
     if not is_zap_reachable(args.api_key, args.zap_host, args.zap_port):
         print("[!] No running ZAP daemon detected on "
               f"{args.zap_host}:{args.zap_port}.")
-
-        if args.auto_docker:
-            start_zap_docker(args.docker_image, args.zap_port, args.docker_container)
-            # Give Docker some time to start ZAP and then poll for readiness.
-            for _ in range(30):
-                time.sleep(2)
-                if is_zap_reachable(args.api_key, args.zap_host, args.zap_port):
-                    print("[+] ZAP Docker container is up and responding.")
-                    break
-            else:
-                print("[!] ZAP still not responding after starting Docker. "
-                      "Please check Docker manually.")
-                return
-        else:
-            answer = input(
-                "[?] Would you like this script to start ZAP in Docker for you? [y/N]: "
-            ).strip().lower()
-            if answer == "y":
-                start_zap_docker(args.docker_image, args.zap_port, args.docker_container)
-                for _ in range(30):
-                    time.sleep(2)
-                    if is_zap_reachable(args.api_key, args.zap_host, args.zap_port):
-                        print("[+] ZAP Docker container is up and responding.")
-                        break
-                else:
-                    print("[!] ZAP still not responding after starting Docker. "
-                          "Please check Docker manually.")
-                    return
-            else:
-                print(
-                    "[!] Please start a ZAP daemon manually (for example:\n"
-                    "    docker run -u zap -p 8080:8080 -i owasp/zap2docker-stable "
-                    "zap.sh -daemon -port 8080\n"
-                    "    ) and re-run this script."
-                )
-                return
-
-    try:
-        result = run_dast(
-            target=args.target,
-            api_key=args.api_key,
-            zap_host=args.zap_host,
-            zap_port=args.zap_port,
-            output_json=output_json,
-            output_base=output_base,
-            formats=formats,
-            login_url=args.login_url,
-            login_username=args.login_username,
-            login_password=args.login_password,
-            include=args.include,
-            exclude=args.exclude,
-            poll_delay=args.poll_delay,
-            ignore_alerts=args.ignore_alerts,
+        print(
+            "[!] Please install and start ZAP manually, then re-run this script.\n"
+            "    - Getting started: https://www.zaproxy.org/getting-started\n"
+            "    - Download:        https://www.zaproxy.org/download\n"
+            "    Example daemon start on Linux:\n"
+            "      zap.sh -daemon -host 127.0.0.1 -port 8080 "
+            "-config api.key=<your_key>\n"
         )
-    finally:
-        # If we started Docker automatically, clean it up.
-        if args.auto_docker:
-            stop_zap_docker(args.docker_container)
+        return
+
+    result = run_dast(
+        target=args.target,
+        api_key=args.api_key,
+        zap_host=args.zap_host,
+        zap_port=args.zap_port,
+        output_json=output_json,
+        output_base=output_base,
+        formats=formats,
+        login_url=args.login_url,
+        login_username=args.login_username,
+        login_password=args.login_password,
+        auth_users=args.auth_users,
+        protected_paths=args.protected_paths,
+        enable_rules=args.enable_rules,
+        disable_rules=args.disable_rules,
+        include=args.include,
+        exclude=args.exclude,
+        poll_delay=args.poll_delay,
+        ignore_alerts=args.ignore_alerts,
+    )
 
     # Print a concise console summary and optionally fail the process based on
     # alert severities (CI-style usage).
