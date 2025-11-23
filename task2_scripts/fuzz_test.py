@@ -49,8 +49,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 LOGS_ROOT = SCRIPT_ROOT / "logs"
 
 # Default endpoints to fuzz when running in full automatic mode. These are
-# chosen to work well with both the CA2 Django banking application and the
-# accompanying insecure Flask demo app, and also cover common REST / web
+# common REST / web
 # patterns you see in typical applications.
 AUTO_PATHS = [
     "/",                      # landing page / dashboard
@@ -232,7 +231,7 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "..\\..\\..\\..\\windows\\win.ini",
         "/../../../../../../etc/shadow",
         "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
-        # Extra traversal targets.
+     
         "../../../../../../../../var/www/html/index.php",
         "..\\..\\..\\..\\..\\boot.ini",
         "../../../.ssh/id_rsa",
@@ -247,7 +246,7 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "😀😃😄😁😆😅😂🤣",
         "\u202eevil.exe",
         "null-byte-\u0000-test",
-        # Extra unicode edge-cases.
+       
         "𝔘𝔫𝔦𝔠𝔬𝔡𝔢𝔖𝔱𝔯𝔦𝔫𝔤",
         "قائمة",
         "русский-текст",
@@ -264,7 +263,7 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "{% if 1 %}test{% endif %}",
         "{{ request.user.username }}",
         "{{ settings.SECRET_KEY }}",
-        # Extra template / SSTI-style probes.
+       
         "{{ request.META }}",
         "{{ ''.__class__.__mro__[2].__subclasses__() }}",
         "{{ config.items() }}",
@@ -1533,4 +1532,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# James Scott (sba24070)
+#James Scott (sba24070)
