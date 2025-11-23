@@ -28,20 +28,20 @@ the root file and adds Flask-specific dependencies.
 From the repository root:
 
 ```bash
-cd flask
+cd flask_website
 chmod +x setup.sh
 ./setup.sh
 ```
 
 This will:
 
-- Create a local virtualenv in `flask/.venv` (if it does not already exist).
-- Install dependencies from `flask/requirements.txt`.
+- Create a local virtualenv in `flask_website/.venv` (if it does not already exist).
+- Install dependencies from `flask_website/requirements.txt`.
 
 You can then either activate the environment:
 
 ```bash
-cd flask
+cd flask_website
 source .venv/bin/activate
 ```
 
@@ -53,7 +53,7 @@ or call the Python binary explicitly as shown below.
 
 ```bash
 # Insecure Flask app (port 5000)
-cd flask/insecure_flask_app
+cd flask_website/insecure_flask_app
 ../.venv/bin/python app.py
 
 # Secure Flask app (port 5001)
@@ -77,11 +77,11 @@ From the repository root (`~/College/Scripting`):
 
 ```bash
 # Build and run the insecure Flask app
-docker build -f flask/insecure_flask_app/Dockerfile -t insecure_flask_app .
+docker build -f flask_website/insecure_flask_app/Dockerfile -t insecure_flask_app .
 docker run -p 5000:5000 insecure_flask_app
 
 # Build and run the secure Flask app
-docker build -f flask/secure_flask_app/Dockerfile -t secure_flask_app .
+docker build -f flask_website/secure_flask_app/Dockerfile -t secure_flask_app .
 docker run -e SECURE_FLASK_SECRET="change-me-to-a-long-random-value" -p 5001:5001 secure_flask_app
 ```
 

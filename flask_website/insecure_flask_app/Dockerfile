@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir flask
 
 # Copy only the insecure Flask app into the image (paths relative to repo root).
-COPY flask/insecure_flask_app/ /app/
+COPY flask_website/insecure_flask_app/ /app/
 
 EXPOSE 5000
 

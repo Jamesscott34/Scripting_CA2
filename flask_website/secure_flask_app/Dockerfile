@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir flask werkzeug
 
 # Copy only the secure Flask app into the image (paths relative to repo root).
-COPY flask/secure_flask_app/ /app/
+COPY flask_website/secure_flask_app/ /app/
 
 EXPOSE 5001
 

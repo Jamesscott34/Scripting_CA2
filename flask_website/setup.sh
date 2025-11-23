@@ -4,9 +4,11 @@ set -euo pipefail
 # Simple one-command setup for the Flask demo apps.
 #
 # This script:
-#   - Creates a Python virtual environment in ./flask/.venv
-#   - Installs dependencies from ./flask/requirements.txt
-# It does NOT start the servers automatically; see README.md for run commands.
+#   - Creates a Python virtual environment in ./flask_website/.venv
+#   - Installs dependencies from ./flask_website/requirements.txt
+#   - Starts BOTH Flask servers on separate ports:
+#       - insecure_flask_app on port 5000
+#       - secure_flask_app   on port 5001
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
@@ -20,24 +22,42 @@ else
   echo "[*] Reusing existing virtual environment in $VENV_DIR"
 fi
 
-echo "[+] Upgrading pip and installing dependencies from flask/requirements.txt"
+echo "[+] Upgrading pip and installing dependencies from flask_website/requirements.txt"
 "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-"$VENV_DIR/bin/pip" install -r "$ROOT_DIR/requirements.txt"
+"$VENV_DIR/bin/pip" install -r "$ROOT_DIR/requirements.txt" >/dev/null
+
+echo "[+] Dependencies installed."
+
+INSECURE_APP="$ROOT_DIR/insecure_flask_app/app.py"
+SECURE_APP="$ROOT_DIR/secure_flask_app/app.py"
+
+if [ ! -f "$INSECURE_APP" ] || [ ! -f "$SECURE_APP" ]; then
+  echo "[!] Could not find Flask app entrypoints:"
+  echo "    insecure: $INSECURE_APP"
+  echo "    secure:   $SECURE_APP"
+  exit 1
+fi
+
+echo "[+] Starting insecure Flask app on http://127.0.0.1:5000 ..."
+"$VENV_DIR/bin/python" "$INSECURE_APP" >/dev/null 2>&1 &
+INSECURE_PID=$!
+
+echo "[+] Starting secure Flask app on http://127.0.0.1:5001 ..."
+SECURE_FLASK_SECRET=${SECURE_FLASK_SECRET:-"change-me-to-a-long-random-value"}
+SECURE_FLASK_SECRET="$SECURE_FLASK_SECRET" \
+  "$VENV_DIR/bin/python" "$SECURE_APP" >/dev/null 2>&1 &
+SECURE_PID=$!
 
 echo
-echo "[+] Flask environment ready."
+echo "[+] Both Flask apps are starting in the background:"
+echo "    Insecure app PID: $INSECURE_PID  (port 5000)"
+echo "    Secure  app PID:  $SECURE_PID    (port 5001)"
 echo
-echo "To run the apps using the virtualenv:"
+echo "To stop them later, you can run:"
+echo "  kill $INSECURE_PID $SECURE_PID"
 echo
-echo "  cd flask"
-echo "  source .venv/bin/activate"
-echo "  # Insecure app (port 5000)"
-echo "  cd insecure_flask_app && python app.py"
-echo
-echo "  # Secure app (port 5001)"
-echo "  cd ../secure_flask_app"
-echo "  export SECURE_FLASK_SECRET=\"change-me-to-a-long-random-value\""
-echo "  python app.py"
+echo "Or find them with:"
+echo "  ps aux | grep app.py"
 echo
 
 
