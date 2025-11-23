@@ -115,3 +115,5 @@ class SecurityModeForm(forms.ModelForm):
     class Meta:
         model = SecurityConfig
         fields = ["mode"]
+
+# James Scott (sba24070)

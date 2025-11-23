@@ -20,3 +20,5 @@ urlpatterns = [
         {"document_root": settings.STATICFILES_DIRS[0]},
     ),
 ]
+
+# James Scott (sba24070)

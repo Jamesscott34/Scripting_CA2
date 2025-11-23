@@ -92,5 +92,4 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS("Demo data created successfully."))
 
-
-
+# James Scott (sba24070)

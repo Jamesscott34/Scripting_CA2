@@ -489,3 +489,5 @@ OWASP CI/CD control mapping:
 | ZAP DAST scan step                          | CICD-SEC-08 (Automated Security Testing) | Performs authenticated dynamic security testing against the running application.      |
 | SARIF upload to GitHub Code Scanning        | CICD-SEC-09 (Artifact Integrity)         | Centralises SAST findings in GitHub for tracking, triage, and historical comparison.  |
 | Logs & reports uploaded as CI artifacts     | CICD-SEC-09 (Artifact Integrity)         | Persists test and security reports for audit trails and post-run analysis.            |
+
+James Scott (sba24070)-->

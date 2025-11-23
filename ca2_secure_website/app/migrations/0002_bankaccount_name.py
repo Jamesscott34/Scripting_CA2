@@ -16,3 +16,5 @@ class Migration(migrations.Migration):
             field=models.CharField(default='Current Account', max_length=50),
         ),
     ]
+
+# James Scott (sba24070)

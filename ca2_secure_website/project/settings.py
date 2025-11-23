@@ -146,4 +146,4 @@ SECURE_HSTS_PRELOAD = SECURE_MODE == "secure"
 SECURE_HSTS_SECONDS = 31536000 if SECURE_MODE == "secure" else 0
 X_FRAME_OPTIONS = "DENY" if SECURE_MODE == "secure" else "SAMEORIGIN"
 
-
+# James Scott (sba24070)

@@ -20,3 +20,4 @@ def security_mode(request):
 
     return {"SECURE_MODE": mode}
 
+# James Scott (sba24070)

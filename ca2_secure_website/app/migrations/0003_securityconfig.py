@@ -19,3 +19,5 @@ class Migration(migrations.Migration):
             ],
         ),
     ]
+
+# James Scott (sba24070)

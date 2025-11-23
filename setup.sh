@@ -186,3 +186,4 @@ log
 log "[*] To run the app locally (outside Docker) in secure mode:"
 log "    cd \"${PROJECT_ROOT}/ca2_secure_website\" && USE_SQLITE=1 SECURE_MODE=secure python manage.py runserver 127.0.0.1:8001"
 
+# James Scott (sba24070)

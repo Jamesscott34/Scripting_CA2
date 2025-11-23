@@ -1124,4 +1124,4 @@ def _write_sarif(result: Dict[str, Any], sarif_path: Path) -> None:
 if __name__ == "__main__":
     main()
 
-
+# James Scott (sba24070)

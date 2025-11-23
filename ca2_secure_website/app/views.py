@@ -314,3 +314,5 @@ def admin_dashboard(request: HttpRequest) -> HttpResponse:
         "current_mode": _get_current_mode(),
     }
     return render(request, "app/admin_dashboard.html", context)
+
+# James Scott (sba24070)

@@ -64,4 +64,4 @@ class Transaction(models.Model):
     def __str__(self) -> str:
         return f"{self.amount} on {self.account.iban}"
 
-
+# James Scott (sba24070)

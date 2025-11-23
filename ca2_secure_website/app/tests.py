@@ -375,4 +375,4 @@ class Task2HelperUnitTests(SimpleTestCase):
         # We capture stdout via the Django test runner's output capture.
         self._print_summary({})
 
-
+# James Scott (sba24070)
