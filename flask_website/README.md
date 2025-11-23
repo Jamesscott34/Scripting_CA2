@@ -111,8 +111,7 @@ them with `python app.py`.
   - Secure app validates input, uses a simple CSRF token on all POST forms, and
     implements `/search` with a parameterised `LIKE` query while relying on
     Jinja2 auto-escaping.
-
-Use these two apps side by side with your existing Task 2 scripts (fuzzer,
-Bandit, ZAP) to compare insecure vs secure behaviour in reports and demos.
+'
+---
 
 James Scott (sba24070)-->
