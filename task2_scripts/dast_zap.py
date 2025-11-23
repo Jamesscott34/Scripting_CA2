@@ -1,5 +1,5 @@
 """
-Advanced OWASP ZAP DAST helper for the CA2 Secure scripting
+OWASP ZAP DAST helper for the CA2 Secure scripting
 
 
 - Start a ZAP daemon in Docker automatically (or connect to an existing one).
@@ -31,7 +31,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import requests
 from zapv2 import ZAPv2
@@ -485,6 +485,220 @@ def run_dast(
     return result
 
 
+def run_manual_dast(
+    target: str,
+    insecure: bool,
+    output_json: Optional[Path] = None,
+    output_base: Optional[Path] = None,
+    formats: Optional[List[str]] = None,
+    max_pages: int = 50,
+) -> Dict[str, Any]:
+    """
+    Minimal "manual" DAST fallback when ZAP is not available.
+
+    This does a lightweight crawl of the target using the requests library and
+    flags a handful of common issues:
+      - Missing security headers (X-Frame-Options, X-Content-Type-Options, CSP)
+      - Weak cookies (missing HttpOnly/Secure/SameSite on HTTPS)
+      - 5xx responses and obvious error signatures in responses
+    """
+
+    print("[*] ZAP is not reachable; running manual HTTP DAST instead...")
+    session = requests.Session()
+    verify = not insecure
+
+    parsed = urlparse(target)
+    base_netloc = parsed.netloc or parsed.path
+    start_url = target
+
+    seen: set[str] = set()
+    queue: List[str] = [start_url]
+    alerts: List[Dict[str, Any]] = []
+
+    security_header_names = [
+        "x-frame-options",
+        "x-content-type-options",
+        "content-security-policy",
+        "strict-transport-security",
+    ]
+
+    error_signatures = [
+        "Traceback",
+        "Exception",
+        "Internal Server Error",
+        "500 Internal Server Error",
+        "OperationalError",
+    ]
+
+    debug_signatures = [
+        "Werkzeug Debugger",
+        "DEBUG = True",
+        "Debug mode",
+        "Django Debug",
+    ]
+
+    def _add_alert(name: str, risk: str, url: str, evidence: str = "") -> None:
+        alerts.append(
+            {
+                "alert": name,
+                "risk": risk,
+                "url": url,
+                "evidence": evidence,
+            }
+        )
+
+    while queue and len(seen) < max_pages:
+        url = queue.pop(0)
+        if url in seen:
+            continue
+        seen.add(url)
+
+        try:
+            resp = session.get(url, timeout=5, verify=verify, allow_redirects=True)
+        except requests.RequestException as exc:
+            _add_alert("Connection error", "Low", url, evidence=str(exc))
+            continue
+
+        status = resp.status_code
+        text = resp.text or ""
+        headers = {k.lower(): v for k, v in resp.headers.items()}
+
+        # 5xx / error signatures.
+        if 500 <= status < 600:
+            _add_alert("Server error (5xx)", "Medium", url, evidence=str(status))
+        if any(sig in text for sig in error_signatures):
+            _add_alert("Error signature in response body", "Medium", url)
+
+        # Debug / framework information leakage.
+        if any(sig in text for sig in debug_signatures):
+            _add_alert("Debug information exposed", "Medium", url)
+
+        # Missing security headers.
+        missing = [h for h in security_header_names if h not in headers]
+        for h in missing:
+            if h == "content-security-policy":
+                _add_alert("Content Security Policy header missing", "Medium", url)
+            elif h == "x-frame-options":
+                _add_alert("X-Frame-Options header missing", "Low", url)
+            elif h == "x-content-type-options":
+                _add_alert("X-Content-Type-Options header missing", "Low", url)
+            elif h == "strict-transport-security" and url.startswith("https://"):
+                _add_alert("Strict-Transport-Security header missing", "Medium", url)
+
+        # Weak cookies on HTTPS.
+        if url.startswith("https://"):
+            set_cookie = headers.get("set-cookie", "")
+            if set_cookie:
+                if "httponly" not in set_cookie.lower():
+                    _add_alert("Cookie missing HttpOnly flag", "Low", url)
+                if "secure" not in set_cookie.lower():
+                    _add_alert("Cookie missing Secure flag", "Low", url)
+
+        # Simple directory listing detection.
+        if "Index of /" in text or "Directory listing for" in text:
+            _add_alert("Directory listing enabled", "Low", url)
+
+        # Simple PII / email leak detection.
+        if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, flags=re.IGNORECASE):
+            _add_alert("Possible email/PII in response body", "Low", url)
+
+        # Very small HTML link discovery (no external deps).
+        if "text/html" in headers.get("content-type", ""):
+            for match in re.finditer(r'href=[\'"]([^\'"#]+)', text, flags=re.IGNORECASE):
+                href = match.group(1)
+                joined = urljoin(url, href)
+                parsed_href = urlparse(joined)
+                if (
+                    parsed_href.scheme in ("http", "https")
+                    and (parsed_href.netloc or parsed_href.path) == base_netloc
+                    and joined not in seen
+                ):
+                    queue.append(joined)
+
+    # Build a very small severity summary to keep the shape similar to ZAP.
+    severities: Dict[str, int] = {"High": 0, "Medium": 0, "Low": 0, "Informational": 0}
+    for a in alerts:
+        risk = str(a.get("risk", "Informational") or "Informational")
+        if risk not in severities:
+            risk = "Informational"
+        severities[risk] += 1
+
+    # Rough OWASP classification for manual issues.
+    owasp_summary: Dict[str, int] = {}
+    for a in alerts:
+        name = str(a.get("alert", "")).lower()
+        cats: List[str] = []
+        if "cookie" in name:
+            cats.append("A02:2021-Cryptographic Failures")
+        if "header" in name or "csp" in name or "x-frame-options" in name:
+            cats.append("A05:2021-Security Misconfiguration")
+        if "server error" in name or "error signature" in name:
+            cats.append("A05:2021-Security Misconfiguration")
+        if "debug" in name:
+            cats.append("A05:2021-Security Misconfiguration")
+        if "directory listing" in name or "listing enabled" in name:
+            cats.append("A05:2021-Security Misconfiguration")
+        if "pii" in name or "email" in name:
+            cats.append("A09:2021-Security Logging and Monitoring Failures")
+        for c in cats:
+            owasp_summary[c] = owasp_summary.get(c, 0) + 1
+        if cats:
+            a["owasp_categories"] = cats  # type: ignore[assignment]
+
+    impact_score = (
+        severities["High"] * 9
+        + severities["Medium"] * 6
+        + severities["Low"] * 3
+        + severities["Informational"] * 1
+    )
+
+    result: Dict[str, Any] = {
+        "target": target,
+        "alerts": alerts,
+        "severity_summary": severities,
+        "owasp_summary": owasp_summary,
+        "impact_score": impact_score,
+        "engine": "manual-http",
+        "pages_crawled": len(seen),
+    }
+
+    # Basic JSON/text output.
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(json.dumps(result, indent=2))
+        print(f"[+] Manual DAST JSON report written to {output_json}")
+
+    formats = formats or []
+    if output_base is not None and formats:
+        output_base.parent.mkdir(parents=True, exist_ok=True)
+        base = output_base
+
+        if "json" in formats and output_json is None:
+            json_path = base.with_suffix(".json")
+            json_path.write_text(json.dumps(result, indent=2))
+            print(f"[+] Manual DAST JSON report written to {json_path}")
+
+        log_path = base.with_suffix(".log")
+        lines = [
+            f"Manual HTTP DAST summary for {target}",
+            f"Generated at: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+            "",
+            f"Pages crawled: {len(seen)}",
+            "",
+            "Severity counts:",
+        ]
+        for sev, count in severities.items():
+            lines.append(f"  {sev}: {count}")
+        lines.append("")
+        lines.append("Alerts:")
+        for a in alerts:
+            lines.append(f"- [{a.get('risk')}] {a.get('alert')} on {a.get('url')}")
+        log_path.write_text("\n".join(lines))
+        print(f"[+] Manual DAST text log written to {log_path}")
+
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run an OWASP ZAP DAST scan against the CA2 Django app or another target."
@@ -515,6 +729,16 @@ def parse_args() -> argparse.Namespace:
         "--output-json",
         default=None,
         help="Optional path to write a JSON report of all ZAP alerts.",
+    )
+    parser.add_argument(
+        "--type",
+        choices=["zap", "dast"],
+        default="zap",
+        help=(
+            "Engine to use: 'zap' (default) to run an OWASP ZAP scan when "
+            "available (falling back to manual HTTP checks if not), or 'dast' "
+            "to always run the built-in manual HTTP scanner only."
+        ),
     )
     parser.add_argument(
         "--login-url",
@@ -705,42 +929,53 @@ def main() -> None:
     if not check_target_available(args.target, insecure=args.insecure):
         return
 
-    # Check if ZAP is already reachable; if not, instruct the user to start it
-    # manually using the official installers (see https://www.zaproxy.org/download)
-    # and getting started guide (https://www.zaproxy.org/getting-started).
-    if not is_zap_reachable(args.api_key, args.zap_host, args.zap_port):
-        print("[!] No running ZAP daemon detected on "
-              f"{args.zap_host}:{args.zap_port}.")
-        print(
-            "[!] Please install and start ZAP manually, then re-run this script.\n"
-            "    - Getting started: https://www.zaproxy.org/getting-started\n"
-            "    - Download:        https://www.zaproxy.org/download\n"
-            "    Example daemon start on Linux:\n"
-            "      zap.sh -daemon -host 127.0.0.1 -port 8080 "
-            "-config api.key=<your_key>\n"
+    # Decide whether to run ZAP, the manual HTTP scanner, or both (fallback).
+    if args.type == "zap":
+        if is_zap_reachable(args.api_key, args.zap_host, args.zap_port):
+            result = run_dast(
+                target=args.target,
+                api_key=args.api_key,
+                zap_host=args.zap_host,
+                zap_port=args.zap_port,
+                output_json=output_json,
+                output_base=output_base,
+                formats=formats,
+                login_url=args.login_url,
+                login_username=args.login_username,
+                login_password=args.login_password,
+                auth_users=args.auth_users,
+                protected_paths=args.protected_paths,
+                enable_rules=args.enable_rules,
+                disable_rules=args.disable_rules,
+                include=args.include,
+                exclude=args.exclude,
+                poll_delay=args.poll_delay,
+                ignore_alerts=args.ignore_alerts,
+            )
+        else:
+            print(
+                "[!] No running ZAP daemon detected; falling back to manual HTTP DAST.\n"
+                "    To enable full ZAP scanning in future, install and start ZAP:\n"
+                "      - Getting started: https://www.zaproxy.org/getting-started\n"
+                "      - Download:        https://www.zaproxy.org/download\n"
+            )
+            result = run_manual_dast(
+                target=args.target,
+                insecure=args.insecure,
+                output_json=output_json,
+                output_base=output_base,
+                formats=formats,
+            )
+    else:
+        # --type dast: skip ZAP entirely and just run the manual HTTP crawler.
+        print("[*] Engine type 'dast' selected; running manual HTTP scanner only.")
+        result = run_manual_dast(
+            target=args.target,
+            insecure=args.insecure,
+            output_json=output_json,
+            output_base=output_base,
+            formats=formats,
         )
-        return
-
-    result = run_dast(
-        target=args.target,
-        api_key=args.api_key,
-        zap_host=args.zap_host,
-        zap_port=args.zap_port,
-        output_json=output_json,
-        output_base=output_base,
-        formats=formats,
-        login_url=args.login_url,
-        login_username=args.login_username,
-        login_password=args.login_password,
-        auth_users=args.auth_users,
-        protected_paths=args.protected_paths,
-        enable_rules=args.enable_rules,
-        disable_rules=args.disable_rules,
-        include=args.include,
-        exclude=args.exclude,
-        poll_delay=args.poll_delay,
-        ignore_alerts=args.ignore_alerts,
-    )
 
     # Print a concise console summary and optionally fail the process based on
     # alert severities (CI-style usage).
