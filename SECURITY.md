@@ -8,9 +8,9 @@ supported.
 
 | Version | Supported          |
 | ------- | ------------------ |
+| v1.2.x  | :white_check_mark: |
 | v1.1.x  | :white_check_mark: |
 | v1.0.x  | :x:                |
-| < 1.0   | :x:                |
 
 If you are using an unsupported version, please upgrade to the latest tagged
 release on the `main` branch before reporting security issues.
