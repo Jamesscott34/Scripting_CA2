@@ -367,7 +367,7 @@ def run_dast(
     result: Dict[str, Any] = {
         "target": target,
         "context_id": context_id,
-        "user_id": user_id,
+        "user_ids": user_ids,
         "alerts": alerts,
         "severity_summary": severities,
         "owasp_summary": category_counts,
@@ -410,7 +410,7 @@ def run_dast(
                 "",
                 "## Scan metadata",
                 f"- Target: `{target}`",
-                f"- Auth mode: {'authenticated' if user_id is not None else 'unauthenticated'}",
+                f"- Auth mode: {'authenticated' if user_ids else 'unauthenticated'}",
                 f"- Included: {', '.join(include or []) or '(default target host)'}",
                 f"- Excluded: {', '.join(exclude or []) or '(none)'}",
                 "",
