@@ -1,6 +1,8 @@
 import datetime
 import os
 import sqlite3
+import subprocess
+import pickle
 from functools import wraps
 
 from flask import (
@@ -280,6 +282,39 @@ def create_app() -> Flask:
             results = cur.fetchall()
 
         return render_template("search.html", user=user, query=query, results=results)
+
+    @app.route("/ping")
+    def ping():
+        """
+        VULNERABLE: command injection via shell=True and unsanitised input.
+
+        This endpoint is intentionally unsafe so that Bandit and DAST tools can
+        demonstrate detection of OS command injection issues.
+        """
+
+        target = request.args.get("host", "127.0.0.1")
+        cmd = f"ping -c 1 {target}"
+        # Dangerous pattern: shell=True with user-controlled input.
+        subprocess.run(cmd, shell=True)
+        return f"Pinged {target}"
+
+    @app.route("/debug/load")
+    def load_debug():
+        """
+        VULNERABLE: unsafe deserialisation using pickle.loads on untrusted data.
+
+        Accepts a hex-encoded pickle payload via the 'data' query parameter and
+        deserialises it directly, which can lead to arbitrary code execution.
+        """
+
+        data = request.args.get("data", "")
+        try:
+            raw = bytes.fromhex(data)
+        except ValueError:
+            return "Invalid hex input", 400
+
+        obj = pickle.loads(raw)
+        return str(obj)
 
     # Ensure the database exists on first request.
     @app.before_request
