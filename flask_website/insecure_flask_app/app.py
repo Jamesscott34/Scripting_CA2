@@ -37,6 +37,11 @@ def create_app() -> Flask:
     # VULNERABLE: hard-coded secret key and debug enabled in "production".
     app.config["SECRET_KEY"] = "insecure-demo-secret-key"
     app.config["DEBUG"] = True
+    # VULNERABLE: weaken session cookie security flags so that ZAP and other
+    # tools can easily detect missing HttpOnly/Secure/SameSite protections.
+    app.config["SESSION_COOKIE_HTTPONLY"] = False
+    app.config["SESSION_COOKIE_SECURE"] = False
+    app.config["SESSION_COOKIE_SAMESITE"] = None
 
     @app.before_request
     def _open_db() -> None:
@@ -144,6 +149,8 @@ def create_app() -> Flask:
                     """
                 )
                 db.commit()
+                # VULNERABLE: log credentials in clear text to the server log.
+                print(f"[INSECURE] Registered user={username!r} password={password!r}")
             except sqlite3.IntegrityError:
                 flash("Username already exists.", "danger")
                 return render_template("register.html")
@@ -184,10 +191,14 @@ def create_app() -> Flask:
             row = cur.fetchone()
             if row and row["password"] == password:
                 session["user_id"] = row["id"]
+                # VULNERABLE: echo the plaintext password into the logs.
+                print(f"[INSECURE] Successful login for user={username!r} password={password!r}")
                 flash("Logged in successfully.", "success")
                 next_url = request.args.get("next") or url_for("dashboard")
                 return redirect(next_url)
 
+            # VULNERABLE: still log attempted credentials even when invalid.
+            print(f"[INSECURE] Failed login for user={username!r} password={password!r}")
             flash("Invalid credentials.", "danger")
 
         return render_template("login.html")
@@ -294,8 +305,10 @@ def create_app() -> Flask:
 
         target = request.args.get("host", "127.0.0.1")
         cmd = f"ping -c 1 {target}"
-        # Dangerous pattern: shell=True with user-controlled input.
-        subprocess.run(cmd, shell=True)
+        # Dangerous pattern: shell=True with user-controlled input. Using
+        # check_output() means that non-zero exit codes will raise an
+        # exception, which will surface as 5xx errors when fuzzed.
+        subprocess.check_output(cmd, shell=True)
         return f"Pinged {target}"
 
     @app.route("/debug/load")
@@ -308,13 +321,34 @@ def create_app() -> Flask:
         """
 
         data = request.args.get("data", "")
-        try:
-            raw = bytes.fromhex(data)
-        except ValueError:
-            return "Invalid hex input", 400
-
+        # Intentionally omit robust error handling so that invalid or malicious
+        # input will raise exceptions (ValueError / UnpicklingError), which are
+        # then visible to fuzzing and DAST tools as 5xx responses and stack
+        # traces in debug mode.
+        raw = bytes.fromhex(data)
         obj = pickle.loads(raw)
         return str(obj)
+
+    @app.route("/admin/dump_users")
+    def dump_users():
+        """
+        EXTREMELY VULNERABLE: unauthenticated endpoint that dumps all users,
+        including their plaintext passwords and e-mail addresses.
+
+        This is intentionally unsafe so that ZAP, fuzzing, and manual testing
+        can easily detect sensitive information disclosure and poor password
+        handling practices.
+        """
+
+        db = g.db  # type: ignore[attr-defined]
+        cur = db.execute("SELECT id, username, password, email, balance FROM users")
+        rows = cur.fetchall()
+        lines = ["id,username,password,email,balance"]
+        for row in rows:
+            lines.append(
+                f"{row['id']},{row['username']},{row['password']},{row['email']},{row['balance']}"
+            )
+        return "\n".join(lines), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
     # Ensure the database exists on first request.
     @app.before_request
