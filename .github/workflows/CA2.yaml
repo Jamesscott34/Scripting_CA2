@@ -185,7 +185,7 @@ jobs:
       --fail-on-medium \
       --sarif-path logs/zap_reports/zap_dast.sarif
 
-   # 16) Upload logs and security reports as CI artefacts for CA2 evidence.
+   # 16) Upload logs and security reports as CI artefacts for CA2.
    - name: Upload logs and reports
     if: always()
     uses: actions/upload-artifact@v4
