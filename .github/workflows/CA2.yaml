@@ -209,7 +209,7 @@ jobs:
         run: |
           docker compose down -v
 
-      # 18) Optional Slack/Discord notification on failure (if webhook is set).
+      # 18) Optional Slack/Discord notification on failure.
       - name: Notify Slack on failure (optional)
         if: failure() && env.SLACK_WEBHOOK_URL != ''
         env:
