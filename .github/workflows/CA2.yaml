@@ -5,240 +5,239 @@ name: CA2
 # and then repeats key tests inside the Docker environment.
 
 on:
- # Run on every push to main and on pull requests targeting main.
- push:
-  branches: [ main ]
- pull_request:
-  branches: [ main ]
+  # Run on every push to main and on pull requests targeting main.
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 # Minimum permissions required so SARIF upload can talk to the Code Scanning API.
 permissions:
- contents: read
- security-events: write
+  contents: read
+  security-events: write
 
 jobs:
- test-and-security:
-  runs-on: ubuntu-latest
-  strategy:
-   matrix:
-    python-version: ["3.11", "3.12"]
+  test-and-security:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ "3.11", "3.12" ]
 
-  steps:
-   # 1) Get the source code.
-   - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      # 1) Get the source code.
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-   # 2) Prepare Python runtime.
-   - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-     python-version: ${{ matrix.python-version }}
+      # 2) Prepare Python runtime.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-   # 3) Cache pip downloads to speed up subsequent runs.
-   - name: Cache pip
-    uses: actions/cache@v3
-    with:
-     path: ~/.cache/pip
-     # Only hash the root requirements.txt; the app-specific file was removed.
-     key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-     restore-keys: |
-      ${{ runner.os }}-pip-
+      # 3) Cache pip downloads to speed up subsequent runs.
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          # Only hash the root requirements.txt; the app-specific file was removed.
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-   # 4) Install top-level dependencies (including security tooling deps).
-   - name: Install root requirements.txt
-    run: |
-     python -m pip install --upgrade pip
-     pip install -r requirements.txt
+      # 4) Install top-level dependencies (including security tooling deps).
+      - name: Install root requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-   # 5) Install additional tooling (Bandit for SAST), ensuring SARIF support.
-   - name: Install Bandit (with SARIF support)
-    run: |
-     python -m pip install --upgrade "bandit[sarif]>=1.7.8"
+      # 5) Install additional tooling (Bandit for SAST), ensuring SARIF support.
+      - name: Install Bandit (with SARIF support)
+        run: |
+          python -m pip install --upgrade "bandit[sarif]>=1.7.8"
 
-   # 6) Run dependency vulnerability scanners (pip-audit and Safety).
-   - name: Run pip-audit
-    run: |
-     pip install pip-audit
-     pip-audit --strict
+      # 6) Run dependency vulnerability scanners (pip-audit and Safety).
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit --strict
 
-   - name: Run Safety
-    run: |
-     pip install safety
-     safety check --bare
+      - name: Run Safety
+        run: |
+          pip install safety
+          safety check --bare
 
-   # 6b) Generate a CycloneDX SBOM for Python dependencies.
-   - name: Generate SBOM (CycloneDX for pip)
-    run: |
-     pip install cyclonedx-bom
-     mkdir -p logs
-     # Generate an SBOM for the current Python environment.
-     # 'env' is an alias for 'environment' in cyclonedx-py.
-     cyclonedx-py env -o logs/sbom_python.json
+      # 6b) Generate a CycloneDX SBOM for Python dependencies.
+      - name: Generate SBOM (CycloneDX for pip)
+        run: |
+          pip install cyclonedx-bom
+          mkdir -p logs
+          # Generate an SBOM for the current Python environment.
+          # 'env' is an alias for 'environment' in cyclonedx-py.
+          cyclonedx-py env -o logs/sbom_python.json
 
-   # 7) Run Django tests against a fresh SQLite database in SECURE mode.
-   #  SECURE_MODE=secure enables all protections; TEST_MODE=secure ensures
-   #  Task 2 integration tests only exercise the secure path.
-   - name: Run Django tests (secure mode, SQLite)
-    working-directory: ca2_secure_website
-    env:
-     SECURE_MODE: secure
-     USE_SQLITE: 1
-    run: |
-     python manage.py makemigrations app
-     python manage.py migrate
-     TEST_MODE=secure python manage.py test
+      # 7) Run Django tests against a fresh SQLite database in SECURE mode.
+      #  SECURE_MODE=secure enables all protections; TEST_MODE=secure ensures
+      #  Task 2 integration tests only exercise the secure path.
+      - name: Run Django tests (secure mode, SQLite)
+        working-directory: ca2_secure_website
+        env:
+          SECURE_MODE: secure
+          USE_SQLITE: 1
+        run: |
+          python manage.py makemigrations app
+          python manage.py migrate
+          TEST_MODE=secure python manage.py test
 
-   # 8) Run Django tests again but in INSECURE mode.
-   #  SECURE_MODE=insecure switches to the intentionally vulnerable paths
-   #  (raw SQL, XSS-friendly output, CSRF disabled) so tests and scripts
-   #  can demonstrate real issues.
-   - name: Run Django tests (insecure mode, SQLite)
-    working-directory: ca2_secure_website
-    env:
-     SECURE_MODE: insecure
-     USE_SQLITE: 1
-    run: |
-     TEST_MODE=insecure python manage.py test
+      # 8) Run Django tests again but in INSECURE mode.
+      #  SECURE_MODE=insecure switches to the intentionally vulnerable paths
+      #  (raw SQL, XSS-friendly output, CSRF disabled) so tests and scripts
+      #  can demonstrate real issues.
+      - name: Run Django tests (insecure mode, SQLite)
+        working-directory: ca2_secure_website
+        env:
+          SECURE_MODE: insecure
+          USE_SQLITE: 1
+        run: |
+          TEST_MODE=insecure python manage.py test
 
-   # 8b) Optional coverage report for secure mode (re-runs tests quickly)
-   - name: Generate coverage report (secure mode)
-    working-directory: ca2_secure_website
-    env:
-     SECURE_MODE: secure
-     USE_SQLITE: 1
-    run: |
-     python -m pip install coverage
-     coverage run manage.py test
-     mkdir -p ../logs/coverage
-     coverage xml -o ../logs/coverage/coverage_secure.xml
-     coverage html -d ../logs/coverage/html
+      # 8b) Optional coverage report for secure mode (re-runs tests quickly)
+      - name: Generate coverage report (secure mode)
+        working-directory: ca2_secure_website
+        env:
+          SECURE_MODE: secure
+          USE_SQLITE: 1
+        run: |
+          python -m pip install coverage
+          coverage run manage.py test
+          mkdir -p ../logs/coverage
+          coverage xml -o ../logs/coverage/coverage_secure.xml
+          coverage html -d ../logs/coverage/html
 
-   # 9) Run Bandit SAST and upload SARIF for GitHub code scanning.
-   - name: Run Bandit SAST (SARIF)
-    run: |
-     # --exit-zero ensures CI continues even if Bandit finds issues;
-     # the findings are still captured in the SARIF report for code scanning.
-     python -m bandit -r ca2_secure_website -f sarif -o bandit.sarif --exit-zero
+      # 9) Run Bandit SAST and upload SARIF for GitHub code scanning.
+      - name: Run Bandit SAST (SARIF)
+        run: |
+          # --exit-zero ensures CI continues even if Bandit finds issues;
+          # the findings are still captured in the SARIF report for code scanning.
+          python -m bandit -r ca2_secure_website -f sarif -o bandit.sarif --exit-zero
 
-   - name: Upload Bandit SARIF
-    uses: github/codeql-action/upload-sarif@v4
-    with:
-     sarif_file: bandit.sarif
+      - name: Upload Bandit SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: bandit.sarif
 
-   # 10) Build and start the Docker Compose stack (web + db) in SECURE mode.
-   #   This ensures the Dockerised app can be built and run successfully.
-   - name: Build and start Docker Compose (secure image)
-    working-directory: docker
-    env:
-     SECURE_MODE: secure
-    run: |
-     docker --version
-     docker compose version
-     docker compose up -d --build
+      # 10) Build and start the Docker Compose stack (web + db) in SECURE mode.
+      #   This ensures the Dockerised app can be built and run successfully.
+      - name: Build and start Docker Compose (secure image)
+        working-directory: docker
+        env:
+          SECURE_MODE: secure
+        run: |
+          docker --version
+          docker compose version
+          docker compose up -d --build
 
-   # 11) Build an additional INSECURE image variant using the SECURE_MODE build arg.
-   - name: Build insecure Docker image variant
-    run: |
-     docker build \
-      -f docker/Dockerfile \
-      --build-arg SECURE_MODE=insecure \
-      -t ca2_web:insecure \
-      .
+      # 11) Build an additional INSECURE image variant using the SECURE_MODE build arg.
+      - name: Build insecure Docker image variant
+        run: |
+          docker build \
+            -f docker/Dockerfile \
+            --build-arg SECURE_MODE=insecure \
+            -t ca2_web:insecure \
+            .
 
-   # 12) Scan the secure Docker image with Trivy for container vulnerabilities.
-   - name: Scan Docker Image with Trivy
-    uses: aquasecurity/trivy-action@master
-    with:
-     image-ref: "ca2_web:latest"
-     # Human-readable table output in the CI logs.
-     format: "table"
-     # Only fail the build on HIGH / CRITICAL issues to avoid red builds
-     # for low/medium and Debian base image noise.
-     severity: "HIGH,CRITICAL"
-     # Treat any HIGH/CRITICAL finding as a failing gate; lower severities
-     # still show in the report but won't break CI.
-     exit-code: "1"
+      # 12) Scan the secure Docker image with Trivy for container vulnerabilities.
+      - name: Scan Docker Image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "ca2_web:latest"
+          # Human-readable table output in the CI logs.
+          format: "table"
+          # Only fail the build on HIGH / CRITICAL issues to avoid red builds
+          # for low/medium and Debian base image noise.
+          severity: "HIGH,CRITICAL"
+          # Treat any HIGH/CRITICAL finding as a failing gate; lower severities
+          # still show in the report but won't break CI.
+          exit-code: "1"
 
-   # 13) Tag Docker image with commit SHA to support rollbacks.
-   - name: Tag Docker image
-    working-directory: docker
-    run: |
-     docker tag ca2_web:latest ca2_web:${{ github.sha }}
+      # 13) Tag Docker image with commit SHA to support rollbacks.
+      - name: Tag Docker image
+        working-directory: docker
+        run: |
+          docker tag ca2_web:latest ca2_web:${{ github.sha }}
 
-   # 14) Run Django tests *inside* the Docker web container in both modes.
-   #  SECURE_MODE environment variable is passed through to run tests
-   #  first in secure, then in insecure mode.
-   - name: Run Django tests inside Docker (secure and insecure)
-    working-directory: docker
-    env:
-     PYTHONUNBUFFERED: "1"
-    run: |
-     docker compose run --rm -e SECURE_MODE=secure web python manage.py test
-     docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
+      # 14) Run Django tests *inside* the Docker web container in both modes.
+      #  SECURE_MODE environment variable is passed through to run tests
+      #  first in secure, then in insecure mode.
+      - name: Run Django tests inside Docker (secure and insecure)
+        working-directory: docker
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          docker compose run --rm -e SECURE_MODE=secure web python manage.py test
+          docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
 
-   # 15) Run an OWASP ZAP DAST scan against the Dockerised app.
-   - name: Run ZAP DAST scan
-    run: |
-     python task2_scripts/dast_zap.py \
-      -t http://127.0.0.1:8000 \
-      --auto \
-      --fail-on-medium \
-      --sarif-path logs/zap_reports/zap_dast.sarif
+      # 15) Run an OWASP ZAP DAST scan against the Dockerised app.
+      - name: Run ZAP DAST scan
+        run: |
+          python task2_scripts/dast_zap.py \
+            -t http://127.0.0.1:8000 \
+            --auto \
+            --fail-on-medium \
+            --sarif-path logs/zap_reports/zap_dast.sarif
 
-   # 16) Upload logs and security reports as CI artefacts for CA2.
-   - name: Upload logs and reports
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-     # Use a matrix-specific name so parallel Python versions don't
-     # conflict when creating the same artifact on one workflow run.
-     name: logs-and-reports-${{ matrix.python-version }}
-     # If some matrix jobs don't produce all log folders, don't fail the workflow.
-     if-no-files-found: ignore
-     path: |
-      logs
-      logs/json_logs
-      logs/excel
-      logs/zap_reports
-      logs/coverage
+      # 16) Upload logs and security reports as CI artefacts for CA2.
+      - name: Upload logs and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Use a matrix-specific name so parallel Python versions don't
+          # conflict when creating the same artifact on one workflow run.
+          name: logs-and-reports-${{ matrix.python-version }}
+          # If some matrix jobs don't produce all log folders, don't fail the workflow.
+          if-no-files-found: ignore
+          path: |
+            logs
+            logs/json_logs
+            logs/excel
+            logs/zap_reports
+            logs/coverage
 
-   # 17) Always stop containers and remove volumes to keep CI clean.
-   - name: Stop Docker Compose and clean volumes
-    if: always()
-    working-directory: docker
-    run: |
-     docker compose down -v
+      # 17) Always stop containers and remove volumes to keep CI clean.
+      - name: Stop Docker Compose and clean volumes
+        if: always()
+        working-directory: docker
+        run: |
+          docker compose down -v
 
-   # 18) Optional Slack/Discord notification on failure (if webhook is set).
-   - name: Notify Slack on failure (optional)
-    if: failure() && env.SLACK_WEBHOOK_URL != ''
-    env:
-     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-    run: |
-     payload='{"text":"CA2 CI pipeline failed for commit '${{ github.sha }}'."}'
-     curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+      # 18) Optional Slack/Discord notification on failure (if webhook is set).
+      - name: Notify Slack on failure (optional)
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          payload='{"text":"CA2 CI pipeline failed for commit '${{ github.sha }}'."}'
+          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
 
- codeql-analysis:
-  name: CodeQL Static Analysis
-  runs-on: ubuntu-latest
-  permissions:
-   actions: read
-   contents: read
-   security-events: write
-  strategy:
-   fail-fast: false
-   matrix:
-    language: [ 'python' ]
-  steps:
-   - name: Checkout repository
-    uses: actions/checkout@v4
+  codeql-analysis:
+    name: CodeQL Static Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python' ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-   - name: Initialize CodeQL
-    uses: github/codeql-action/init@v4
-    with:
-     languages: ${{ matrix.language }}
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
 
-   - name: Perform CodeQL Analysis
-    uses: github/codeql-action/analyze@v4
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
 
-# 
