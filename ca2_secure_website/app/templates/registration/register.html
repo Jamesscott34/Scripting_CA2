@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <h1>Create an account</h1>
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Register</button>
-  </form>
-  <p>
-    Already have an account?
-    <a href="{% url 'login' %}">Login here</a>.
-  </p>
+ <h1>Create an account</h1>
+ <form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Register</button>
+ </form>
+ <p>
+  Already have an account?
+  <a href="{% url 'login' %}">Login here</a>.
+ </p>
 {% endblock %}
 
-James Scott (sba24070)-->
+

@@ -5,16 +5,16 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    dependencies = [
-        ('app', '0001_initial'),
-    ]
+  dependencies = [
+    ('app', '0001_initial'),
+  ]
 
-    operations = [
-        migrations.AddField(
-            model_name='bankaccount',
-            name='name',
-            field=models.CharField(default='Current Account', max_length=50),
-        ),
-    ]
+  operations = [
+    migrations.AddField(
+      model_name='bankaccount',
+      name='name',
+      field=models.CharField(default='Current Account', max_length=50),
+    ),
+  ]
 
-# James Scott (sba24070)
+# 

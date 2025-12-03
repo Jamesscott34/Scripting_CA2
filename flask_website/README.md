@@ -93,25 +93,25 @@ them with `python app.py`.
 ### Security differences (high level)
 
 - **Secrets & config**
-  - Insecure app hard-codes `SECRET_KEY` and enables `DEBUG=True`.
-  - Secure app loads `SECRET_KEY` from `SECURE_FLASK_SECRET` (or generates a
-    random value) and uses hardened cookie settings.
+ - Insecure app hard-codes `SECRET_KEY` and enables `DEBUG=True`.
+ - Secure app loads `SECRET_KEY` from `SECURE_FLASK_SECRET` (or generates a
+  random value) and uses hardened cookie settings.
 
 - **Authentication & passwords**
-  - Insecure app stores **plaintext passwords** and uses string-interpolated SQL
-    in login and registration.
-  - Secure app stores **hashed passwords** using
-    `werkzeug.security.generate_password_hash` / `check_password_hash`, and uses
-    parameterised queries.
+ - Insecure app stores **plaintext passwords** and uses string-interpolated SQL
+  in login and registration.
+ - Secure app stores **hashed passwords** using
+  `werkzeug.security.generate_password_hash` / `check_password_hash`, and uses
+  parameterised queries.
 
 - **Transactions & search**
-  - Insecure app has no CSRF protection, weak validation, and `/search` is
-    deliberately vulnerable to **SQL injection** and **reflected XSS**
-    (`{{ tx.message | safe }}`).
-  - Secure app validates input, uses a simple CSRF token on all POST forms, and
-    implements `/search` with a parameterised `LIKE` query while relying on
-    Jinja2 auto-escaping.
+ - Insecure app has no CSRF protection, weak validation, and `/search` is
+  deliberately vulnerable to **SQL injection** and **reflected XSS**
+  (`{{ tx.message | safe }}`).
+ - Secure app validates input, uses a simple CSRF token on all POST forms, and
+  implements `/search` with a parameterised `LIKE` query while relying on
+  Jinja2 auto-escaping.
 '
 ---
 
-James Scott (sba24070)-->
+

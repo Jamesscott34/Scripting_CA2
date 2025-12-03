@@ -1,50 +1,50 @@
 {% load static %}
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>CA2 Secure Bank</title>
-    <link rel="stylesheet" href="{% static 'css/app.css' %}" />
-  </head>
-  <body>
-    <header class="navbar">
-      <div class="brand">
-        CA2 Secure Bank
-        <span class="mode-badge">
-          Mode:
-          {% if SECURE_MODE == "secure" %}
-            Secure
-          {% else %}
-            Insecure (teaching mode)
-          {% endif %}
-        </span>
-      </div>
-      <nav>
-        <a href="{% url 'dashboard' %}">Dashboard</a>
-        <a href="{% url 'profile' %}">Profile</a>
-        <a href="{% url 'search' %}">Search</a>
-        {% if user.is_authenticated %}
-          <form method="post" action="{% url 'logout' %}" style="display:inline;">
-            {% csrf_token %}
-            <button type="submit" class="nav-logout-button">Logout</button>
-          </form>
-        {% else %}
-          <a href="{% url 'login' %}">Login</a>
-        {% endif %}
-      </nav>
-    </header>
+ <head>
+  <meta charset="utf-8" />
+  <title>CA2 Secure Bank</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}" />
+ </head>
+ <body>
+  <header class="navbar">
+   <div class="brand">
+    CA2 Secure Bank
+    <span class="mode-badge">
+     Mode:
+     {% if SECURE_MODE == "secure" %}
+      Secure
+     {% else %}
+      Insecure (teaching mode)
+     {% endif %}
+    </span>
+   </div>
+   <nav>
+    <a href="{% url 'dashboard' %}">Dashboard</a>
+    <a href="{% url 'profile' %}">Profile</a>
+    <a href="{% url 'search' %}">Search</a>
+    {% if user.is_authenticated %}
+     <form method="post" action="{% url 'logout' %}" style="display:inline;">
+      {% csrf_token %}
+      <button type="submit" class="nav-logout-button">Logout</button>
+     </form>
+    {% else %}
+     <a href="{% url 'login' %}">Login</a>
+    {% endif %}
+   </nav>
+  </header>
 
-    <main class="content">
-      {% if messages %}
-        <ul class="messages">
-          {% for message in messages %}
-            <li class="{{ message.tags }}">{{ message }}</li>
-          {% endfor %}
-        </ul>
-      {% endif %}
-      {% block content %}{% endblock %}
-    </main>
-  </body>
+  <main class="content">
+   {% if messages %}
+    <ul class="messages">
+     {% for message in messages %}
+      <li class="{{ message.tags }}">{{ message }}</li>
+     {% endfor %}
+    </ul>
+   {% endif %}
+   {% block content %}{% endblock %}
+  </main>
+ </body>
 </html>
 
-James Scott (sba24070)-->
+

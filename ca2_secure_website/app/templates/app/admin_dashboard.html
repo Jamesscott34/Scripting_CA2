@@ -1,47 +1,47 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <div class="dashboard-layout">
-    <section class="dashboard-card">
-      <h2>Security mode</h2>
-      <p>Current mode: <strong>{{ current_mode }}</strong></p>
-      <form method="post">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="toggle_mode" />
-        {{ mode_form.as_p }}
-        <button type="submit">Update mode</button>
-      </form>
-    </section>
+ <div class="dashboard-layout">
+  <section class="dashboard-card">
+   <h2>Security mode</h2>
+   <p>Current mode: <strong>{{ current_mode }}</strong></p>
+   <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="toggle_mode" />
+    {{ mode_form.as_p }}
+    <button type="submit">Update mode</button>
+   </form>
+  </section>
 
-    <section class="dashboard-card">
-      <h2>All users</h2>
-      <ul>
-        {% for u in users %}
-          <li>
-            {{ u.get_full_name|default:u.username }} – {{ u.email }}
-            {% if not u.is_superuser %}
-              <form method="post" style="display:inline;">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="delete_user" />
-                <input type="hidden" name="user_id" value="{{ u.id }}" />
-                <button type="submit">Delete</button>
-              </form>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
-
-    <section class="dashboard-card">
-      <h2>Add user</h2>
-      <form method="post">
+  <section class="dashboard-card">
+   <h2>All users</h2>
+   <ul>
+    {% for u in users %}
+     <li>
+      {{ u.get_full_name|default:u.username }} – {{ u.email }}
+      {% if not u.is_superuser %}
+       <form method="post" style="display:inline;">
         {% csrf_token %}
-        <input type="hidden" name="action" value="create_user" />
-        {{ user_form.as_p }}
-        <button type="submit">Create user</button>
-      </form>
-    </section>
-  </div>
+        <input type="hidden" name="action" value="delete_user" />
+        <input type="hidden" name="user_id" value="{{ u.id }}" />
+        <button type="submit">Delete</button>
+       </form>
+      {% endif %}
+     </li>
+    {% endfor %}
+   </ul>
+  </section>
+
+  <section class="dashboard-card">
+   <h2>Add user</h2>
+   <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="create_user" />
+    {{ user_form.as_p }}
+    <button type="submit">Create user</button>
+   </form>
+  </section>
+ </div>
 {% endblock %}
 
-James Scott (sba24070)-->
+

@@ -1,30 +1,30 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <h1>Search Transactions</h1>
+ <h1>Search Transactions</h1>
 
-  <form method="get">
-    <label for="q">Search term</label>
-    <input id="q" name="q" type="text" value="{{ query }}">
-    <button type="submit">Search</button>
-  </form>
+ <form method="get">
+  <label for="q">Search term</label>
+  <input id="q" name="q" type="text" value="{{ query }}">
+  <button type="submit">Search</button>
+ </form>
 
-  {% if query %}
-    <p>Showing results for: <code>{{ query }}</code></p>
-  {% endif %}
+ {% if query %}
+  <p>Showing results for: <code>{{ query }}</code></p>
+ {% endif %}
 
-  {% if results %}
-    <ul>
-      {% for tx in results %}
-        <li>
-          <strong>{{ "%.2f"|format(tx.amount) }}</strong> –
-          {{ tx.message }} ({{ tx.created_at }})
-        </li>
-      {% endfor %}
-    </ul>
-  {% elif query %}
-    <p>No results found.</p>
-  {% endif %}
+ {% if results %}
+  <ul>
+   {% for tx in results %}
+    <li>
+     <strong>{{ "%.2f"|format(tx.amount) }}</strong> –
+     {{ tx.message }} ({{ tx.created_at }})
+    </li>
+   {% endfor %}
+  </ul>
+ {% elif query %}
+  <p>No results found.</p>
+ {% endif %}
 {% endblock %}
 
-James Scott (sba24070)-->
+

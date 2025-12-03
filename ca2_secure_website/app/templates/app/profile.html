@@ -1,83 +1,83 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <div class="profile-layout">
-    <section class="profile-card">
-      <h2>Your profile</h2>
-      <p><strong>Username:</strong> {{ user.username }}</p>
-      <p><strong>Email:</strong> {{ user.email }}</p>
+ <div class="profile-layout">
+  <section class="profile-card">
+   <h2>Your profile</h2>
+   <p><strong>Username:</strong> {{ user.username }}</p>
+   <p><strong>Email:</strong> {{ user.email }}</p>
 
-      <h3>Your accounts</h3>
-      <ul>
-        {% for account in accounts %}
-          <li>
-            <strong>{{ account.name }}</strong> –
-            IBAN: {{ account.iban }} –
-            Balance: {{ account.balance }}
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
+   <h3>Your accounts</h3>
+   <ul>
+    {% for account in accounts %}
+     <li>
+      <strong>{{ account.name }}</strong> –
+      IBAN: {{ account.iban }} –
+      Balance: {{ account.balance }}
+     </li>
+    {% endfor %}
+   </ul>
+  </section>
 
-    <section class="profile-card">
-      <h2>Transfer between accounts</h2>
-      <form method="post">
-        {% csrf_token %}
-        {{ transfer_form.as_p }}
-        <button type="submit" name="transfer-submit">Transfer</button>
-      </form>
-    </section>
+  <section class="profile-card">
+   <h2>Transfer between accounts</h2>
+   <form method="post">
+    {% csrf_token %}
+    {{ transfer_form.as_p }}
+    <button type="submit" name="transfer-submit">Transfer</button>
+   </form>
+  </section>
 
-    <section class="profile-card">
-      <h2>Savings planner</h2>
-      <form method="post">
-        {% csrf_token %}
-        {{ savings_form.as_p }}
-        <button type="submit" name="savings-submit">Calculate plan</button>
-      </form>
+  <section class="profile-card">
+   <h2>Savings planner</h2>
+   <form method="post">
+    {% csrf_token %}
+    {{ savings_form.as_p }}
+    <button type="submit" name="savings-submit">Calculate plan</button>
+   </form>
 
-      {% if savings_chart_json %}
-        <canvas id="savingsChart" width="400" height="200"></canvas>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <script>
-          const chartData = {{ savings_chart_json|safe }};
-          const ctx = document.getElementById('savingsChart').getContext('2d');
-          new Chart(ctx, {
-            type: 'line',
-            data: {
-              labels: chartData.labels,
-              datasets: [{
-                label: 'Projected savings',
-                data: chartData.data,
-                borderColor: '#2563eb',
-                backgroundColor: 'rgba(37, 99, 235, 0.2)',
-                tension: 0.25,
-              }]
-            },
-            options: {
-              plugins: {
-                annotation: {
-                  annotations: {
-                    goal: {
-                      type: 'line',
-                      yMin: chartData.goal,
-                      yMax: chartData.goal,
-                      borderColor: '#16a34a',
-                      borderWidth: 1,
-                    }
-                  }
-                }
-              },
-              scales: {
-                x: { title: { display: true, text: 'Month' } },
-                y: { title: { display: true, text: 'Amount saved' } }
-              }
-            }
-          });
-        </script>
-      {% endif %}
-    </section>
-  </div>
+   {% if savings_chart_json %}
+    <canvas id="savingsChart" width="400" height="200"></canvas>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+     const chartData = {{ savings_chart_json|safe }};
+     const ctx = document.getElementById('savingsChart').getContext('2d');
+     new Chart(ctx, {
+      type: 'line',
+      data: {
+       labels: chartData.labels,
+       datasets: [{
+        label: 'Projected savings',
+        data: chartData.data,
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37, 99, 235, 0.2)',
+        tension: 0.25,
+       }]
+      },
+      options: {
+       plugins: {
+        annotation: {
+         annotations: {
+          goal: {
+           type: 'line',
+           yMin: chartData.goal,
+           yMax: chartData.goal,
+           borderColor: '#16a34a',
+           borderWidth: 1,
+          }
+         }
+        }
+       },
+       scales: {
+        x: { title: { display: true, text: 'Month' } },
+        y: { title: { display: true, text: 'Amount saved' } }
+       }
+      }
+     });
+    </script>
+   {% endif %}
+  </section>
+ </div>
 {% endblock %}
 
-James Scott (sba24070)-->
+

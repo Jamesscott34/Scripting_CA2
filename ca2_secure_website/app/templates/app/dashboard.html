@@ -1,48 +1,48 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <div class="dashboard-layout">
-    <section class="dashboard-card">
-      <h2>Overview</h2>
-      <p><strong>Total balance:</strong> {{ total_balance }}</p>
+ <div class="dashboard-layout">
+  <section class="dashboard-card">
+   <h2>Overview</h2>
+   <p><strong>Total balance:</strong> {{ total_balance }}</p>
 
-      <h3>Your accounts</h3>
-      <ul>
-        {% for account in accounts %}
-          <li>
-            <strong>{{ account.name }}</strong> – IBAN: {{ account.iban }} –
-            Balance: {{ account.balance }}
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
+   <h3>Your accounts</h3>
+   <ul>
+    {% for account in accounts %}
+     <li>
+      <strong>{{ account.name }}</strong> – IBAN: {{ account.iban }} –
+      Balance: {{ account.balance }}
+     </li>
+    {% endfor %}
+   </ul>
+  </section>
 
-    <section class="dashboard-card">
-      <h2>Payees</h2>
-      <p>These are all users you can send money to:</p>
-      <ul>
-        {% for payee in payees %}
-          <li>{{ payee.get_full_name|default:payee.username }}</li>
-        {% empty %}
-          <li>No other users yet.</li>
-        {% endfor %}
-      </ul>
-    </section>
+  <section class="dashboard-card">
+   <h2>Payees</h2>
+   <p>These are all users you can send money to:</p>
+   <ul>
+    {% for payee in payees %}
+     <li>{{ payee.get_full_name|default:payee.username }}</li>
+    {% empty %}
+     <li>No other users yet.</li>
+    {% endfor %}
+   </ul>
+  </section>
 
-    <section class="dashboard-card">
-      <h2>Savings goal</h2>
-      {% if savings_account %}
-        <p><strong>Savings balance:</strong> {{ savings_account.balance }}</p>
-        <p><strong>Goal:</strong> {{ savings_goal }}</p>
-        <div class="progress-bar">
-          <div class="progress-bar-fill" style="width: {{ savings_progress }}%;"></div>
-        </div>
-        <p>{{ savings_progress|floatformat:1 }}% of goal reached.</p>
-      {% else %}
-        <p>No savings account found yet. Visit your profile to create one.</p>
-      {% endif %}
-    </section>
-  </div>
+  <section class="dashboard-card">
+   <h2>Savings goal</h2>
+   {% if savings_account %}
+    <p><strong>Savings balance:</strong> {{ savings_account.balance }}</p>
+    <p><strong>Goal:</strong> {{ savings_goal }}</p>
+    <div class="progress-bar">
+     <div class="progress-bar-fill" style="width: {{ savings_progress }}%;"></div>
+    </div>
+    <p>{{ savings_progress|floatformat:1 }}% of goal reached.</p>
+   {% else %}
+    <p>No savings account found yet. Visit your profile to create one.</p>
+   {% endif %}
+  </section>
+ </div>
 {% endblock %}
 
-James Scott (sba24070)-->
+

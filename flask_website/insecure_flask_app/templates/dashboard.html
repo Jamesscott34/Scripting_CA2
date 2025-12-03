@@ -1,34 +1,34 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <h1>Insecure Flask Banking – Dashboard</h1>
+ <h1>Insecure Flask Banking – Dashboard</h1>
 
-  {% if user %}
-    <p>Welcome, <strong>{{ user.username }}</strong>. Your current balance is
-      <strong>{{ "%.2f"|format(user.balance) }}</strong>.
-    </p>
+ {% if user %}
+  <p>Welcome, <strong>{{ user.username }}</strong>. Your current balance is
+   <strong>{{ "%.2f"|format(user.balance) }}</strong>.
+  </p>
 
-    <h2>Recent transactions</h2>
-    {% if transactions %}
-      <ul>
-        {% for tx in transactions %}
-          <li>
-            <strong>{{ "%.2f"|format(tx.amount) }}</strong> –
-            <!-- VULNERABLE: message rendered with |safe in search view; here we keep normal escaping. -->
-            {{ tx.message }} ({{ tx.created_at }})
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p>No transactions yet. Visit your <a href="{{ url_for('profile') }}">profile</a> to create one.</p>
-    {% endif %}
+  <h2>Recent transactions</h2>
+  {% if transactions %}
+   <ul>
+    {% for tx in transactions %}
+     <li>
+      <strong>{{ "%.2f"|format(tx.amount) }}</strong> –
+      <!-- VULNERABLE: message rendered with |safe in search view; here we keep normal escaping. -->
+      {{ tx.message }} ({{ tx.created_at }})
+     </li>
+    {% endfor %}
+   </ul>
   {% else %}
-    <p>You are not logged in.</p>
-    <p>
-      <a href="{{ url_for('login') }}">Login</a> or
-      <a href="{{ url_for('register') }}">Register</a> to get started.
-    </p>
+   <p>No transactions yet. Visit your <a href="{{ url_for('profile') }}">profile</a> to create one.</p>
   {% endif %}
+ {% else %}
+  <p>You are not logged in.</p>
+  <p>
+   <a href="{{ url_for('login') }}">Login</a> or
+   <a href="{{ url_for('register') }}">Register</a> to get started.
+  </p>
+ {% endif %}
 {% endblock %}
 
-James Scott (sba24070)-->
+

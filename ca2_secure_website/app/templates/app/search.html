@@ -1,46 +1,46 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <h1>Search transactions</h1>
-  <form method="get">
-    <input type="text" name="q" value="{{ query }}" placeholder="Search..." />
-    <button type="submit">Search</button>
-  </form>
+ <h1>Search transactions</h1>
+ <form method="get">
+  <input type="text" name="q" value="{{ query }}" placeholder="Search..." />
+  <button type="submit">Search</button>
+ </form>
 
-  {% if query %}
-    <p>
-      Showing results for:
-      <strong>
-        {% if SECURE_MODE == "secure" %}
-          {{ query }}
-        {% else %}
-          {{ query|safe }}
-        {% endif %}
-      </strong>
-    </p>
-    {% if results %}
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Description</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for tx in results %}
-            <tr>
-              <td>{{ tx.created_at }}</td>
-              <td>{{ tx.description }}</td>
-              <td>{{ tx.amount }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+ {% if query %}
+  <p>
+   Showing results for:
+   <strong>
+    {% if SECURE_MODE == "secure" %}
+     {{ query }}
     {% else %}
-      <p>No matching transactions found.</p>
+     {{ query|safe }}
     {% endif %}
+   </strong>
+  </p>
+  {% if results %}
+   <table>
+    <thead>
+     <tr>
+      <th>Date</th>
+      <th>Description</th>
+      <th>Amount</th>
+     </tr>
+    </thead>
+    <tbody>
+     {% for tx in results %}
+      <tr>
+       <td>{{ tx.created_at }}</td>
+       <td>{{ tx.description }}</td>
+       <td>{{ tx.amount }}</td>
+      </tr>
+     {% endfor %}
+    </tbody>
+   </table>
+  {% else %}
+   <p>No matching transactions found.</p>
   {% endif %}
+ {% endif %}
 {% endblock %}
 
-James Scott (sba24070)-->
+

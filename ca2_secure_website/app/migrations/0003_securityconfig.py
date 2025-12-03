@@ -5,19 +5,19 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    dependencies = [
-        ('app', '0002_bankaccount_name'),
-    ]
+  dependencies = [
+    ('app', '0002_bankaccount_name'),
+  ]
 
-    operations = [
-        migrations.CreateModel(
-            name='SecurityConfig',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('mode', models.CharField(choices=[('secure', 'Secure'), ('insecure', 'Insecure')], default='secure', max_length=10)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-            ],
-        ),
-    ]
+  operations = [
+    migrations.CreateModel(
+      name='SecurityConfig',
+      fields=[
+        ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+        ('mode', models.CharField(choices=[('secure', 'Secure'), ('insecure', 'Insecure')], default='secure', max_length=10)),
+        ('updated_at', models.DateTimeField(auto_now=True)),
+      ],
+    ),
+  ]
 
-# James Scott (sba24070)
+# 

@@ -1,23 +1,23 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <h1>Register</h1>
-  <form method="post">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div>
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text">
-    </div>
-    <div>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password">
-    </div>
-    <div>
-      <label for="email">Email (optional)</label>
-      <input id="email" name="email" type="email">
-    </div>
-    <button type="submit">Create account</button>
-  </form>
+ <h1>Register</h1>
+ <form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div>
+   <label for="username">Username</label>
+   <input id="username" name="username" type="text">
+  </div>
+  <div>
+   <label for="password">Password</label>
+   <input id="password" name="password" type="password">
+  </div>
+  <div>
+   <label for="email">Email (optional)</label>
+   <input id="email" name="email" type="email">
+  </div>
+  <button type="submit">Create account</button>
+ </form>
 {% endblock %}
 
-James Scott (sba24070)-->
+

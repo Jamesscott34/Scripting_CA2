@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # Enable "strict mode" for safer shell scripting:
-# -e  : exit immediately if any command exits with a non-zero status
-# -u  : treat unset variables as an error and exit immediately
+# -e : exit immediately if any command exits with a non-zero status
+# -u : treat unset variables as an error and exit immediately
 # -o pipefail : the return value of a pipeline is the status of
-#               the last command to exit with a non-zero status
+#        the last command to exit with a non-zero status
 set -euo pipefail
 
 ###############################################################################
@@ -12,22 +12,22 @@ set -euo pipefail
 #
 # This script is intended to be a **one-stop bootstrap** for the CA2 project.
 # It performs the following high-level steps:
-#   1. Verify prerequisites (Python 3, Docker, Docker Compose).
-#   2. Create and activate a Python virtual environment.
-#   3. Install all project dependencies from `requirements.txt`.
-#   4. Run Django migrations and seed demo data (SQLite).
-#   5. Execute Django tests locally in SECURE and INSECURE modes.
-#   6. Build and start the Docker Compose stack (`web` + `db`).
-#   7. Run Django tests inside Docker in both modes.
+#  1. Verify prerequisites (Python 3, Docker, Docker Compose).
+#  2. Create and activate a Python virtual environment.
+#  3. Install all project dependencies from `requirements.txt`.
+#  4. Run Django migrations and seed demo data (SQLite).
+#  5. Execute Django tests locally in SECURE and INSECURE modes.
+#  6. Build and start the Docker Compose stack (`web` + `db`).
+#  7. Run Django tests inside Docker in both modes.
 #
 # Prerequisites:
-#   - Python 3 (python3 on PATH)
-#   - Docker Engine
-#   - Docker Compose v2 (available as `docker compose`)
+#  - Python 3 (python3 on PATH)
+#  - Docker Engine
+#  - Docker Compose v2 (available as `docker compose`)
 #
 # Usage:
-#   chmod +x setup.sh
-#   ./setup.sh
+#  chmod +x setup.sh
+#  ./setup.sh
 ###############################################################################
 
 # Resolve the absolute path to the **repository root**. This assumes that
@@ -41,29 +41,29 @@ VENV_DIR="${PROJECT_ROOT}/.venv"
 # Print a concise usage/help message. This is intentionally simple and
 # avoids introducing a full CLI parser for the CA2 context.
 usage() {
-  cat <<EOF
+ cat <<EOF
 CA2 setup script
 
 Usage:
-  ./setup.sh
+ ./setup.sh
 
 This script will:
-  - Create/activate a Python virtualenv in .venv
-  - Install dependencies from requirements.txt
-  - Run Django migrations and seed demo data
-  - Run Django tests (secure + insecure) locally
-  - Build & start Docker (web + db) and run tests in containers
+ - Create/activate a Python virtualenv in .venv
+ - Install dependencies from requirements.txt
+ - Run Django migrations and seed demo data
+ - Run Django tests (secure + insecure) locally
+ - Build & start Docker (web + db) and run tests in containers
 
 Options:
-  -h, --help   Show this help message and exit
+ -h, --help  Show this help message and exit
 EOF
 }
 
 # Basic flag handling – only supports -h/--help for now. Any other arguments
 # are ignored to keep behaviour simple and backwards compatible.
 if [[ "${1-}" == "-h" || "${1-}" == "--help" ]]; then
-  usage
-  exit 0
+ usage
+ exit 0
 fi
 
 # Prepare a log file under the repo-level logs directory so that the full
@@ -75,21 +75,21 @@ LOG_FILE="${LOG_DIR}/setup_$(date +%Y%m%d_%H%M%S).log"
 # Logging helpers: write messages to both stdout (for live visibility) and
 # to a timestamped log file (for later inspection).
 log() {
-  printf '%s\n' "$*" | tee -a "${LOG_FILE}"
+ printf '%s\n' "$*" | tee -a "${LOG_FILE}"
 }
 
 log_err() {
-  printf '%s\n' "$*" | tee -a "${LOG_FILE}" >&2
+ printf '%s\n' "$*" | tee -a "${LOG_FILE}" >&2
 }
 
 # Small helper to ensure required commands are available before we start doing
 # real work. Failing fast here avoids half-completed setups.
 require_cmd() {
-  local cmd="$1"
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
-    log_err "[!] Required command '${cmd}' not found on PATH. Please install it and retry."
-    exit 1
-  fi
+ local cmd="$1"
+ if ! command -v "${cmd}" >/dev/null 2>&1; then
+  log_err "[!] Required command '${cmd}' not found on PATH. Please install it and retry."
+  exit 1
+ fi
 }
 
 log "[*] Checking prerequisites..."
@@ -101,17 +101,17 @@ require_cmd python3
 # that `manage.py` is present. This protects against running from the wrong
 # directory or partial checkouts.
 if [[ ! -d "${PROJECT_ROOT}/ca2_secure_website" ]] || [[ ! -f "${PROJECT_ROOT}/ca2_secure_website/manage.py" ]]; then
-  log_err "[!] Django project directory 'ca2_secure_website/' with 'manage.py' not found under ${PROJECT_ROOT}."
-  log_err "[!] Please run this script from the repository root (where README.md lives)."
-  exit 1
+ log_err "[!] Django project directory 'ca2_secure_website/' with 'manage.py' not found under ${PROJECT_ROOT}."
+ log_err "[!] Please run this script from the repository root (where README.md lives)."
+ exit 1
 fi
 
 # Likewise, ensure the Docker configuration folder is present before attempting
 # to build or run containers.
 if [[ ! -d "${PROJECT_ROOT}/docker" ]] || [[ ! -f "${PROJECT_ROOT}/docker/docker-compose.yml" ]]; then
-  log_err "[!] Docker directory or docker-compose.yml not found under ${PROJECT_ROOT}/docker."
-  log_err "[!] Ensure the 'docker/' folder exists and contains 'docker-compose.yml'."
-  exit 1
+ log_err "[!] Docker directory or docker-compose.yml not found under ${PROJECT_ROOT}/docker."
+ log_err "[!] Ensure the 'docker/' folder exists and contains 'docker-compose.yml'."
+ exit 1
 fi
 
 log "[*] Creating virtual environment in ${VENV_DIR} (if not present)..."
@@ -165,8 +165,8 @@ cd "${PROJECT_ROOT}/docker"
 # Verify Docker and Docker Compose v2 are available before attempting to use them.
 require_cmd docker
 if ! docker compose version >/dev/null 2>&1; then
-  log_err "[!] 'docker compose' command not available. Please install Docker Compose v2."
-  exit 1
+ log_err "[!] 'docker compose' command not available. Please install Docker Compose v2."
+ exit 1
 fi
 
 # Build the Docker images and start the stack (web + db) in the background.
@@ -181,9 +181,9 @@ docker compose run --rm -e SECURE_MODE=insecure web python manage.py test
 log "[*] All setup, tests, and Docker checks completed successfully."
 log "[*] The Docker stack (web + db) is still running."
 log "[*] To stop containers and clean volumes later, run:"
-log "    cd \"${PROJECT_ROOT}/docker\" && docker compose down -v"
+log "  cd \"${PROJECT_ROOT}/docker\" && docker compose down -v"
 log
 log "[*] To run the app locally (outside Docker) in secure mode:"
-log "    cd \"${PROJECT_ROOT}/ca2_secure_website\" && USE_SQLITE=1 SECURE_MODE=secure python manage.py runserver 127.0.0.1:8001"
+log "  cd \"${PROJECT_ROOT}/ca2_secure_website\" && USE_SQLITE=1 SECURE_MODE=secure python manage.py runserver 127.0.0.1:8001"
 
-# James Scott (sba24070)
+# 
