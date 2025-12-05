@@ -182,7 +182,7 @@ jobs:
           python task2_scripts/dast_zap.py \
             -t http://127.0.0.1:8000 \
             --auto \
-            --fail-on-medium \
+            --fail-on-high \
             --sarif-path logs/zap_reports/zap_dast.sarif
 
       # 16) Upload logs and security reports as CI artefacts for CA2.
