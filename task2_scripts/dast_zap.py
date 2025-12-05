@@ -1,26 +1,17 @@
 """
-OWASP ZAP DAST helper for the CA2 Secure scripting
+Helper for running OWASP ZAP (or a simple HTTP fallback) against a web target.
 
-
-- Start a ZAP daemon in Docker automatically (or connect to an existing one).
-- Perform a quick HEAD pre-check to verify the target is reachable and not in a
- redirect loop before scanning.
-- Create a dedicated ZAP context with include/exclude rules for the target.
-- Optionally configure form-based authentication and run the spider/active scan
- *as an authenticated user*.
-- Run a classic spider followed by an active scan, polling progress at a
- configurable interval.
-- Collect all alerts and build:
- - A severity summary (High/Medium/Low/Informational).
- - An approximate OWASP Top 10 mapping based on alert names.
- - A simple impact score and per-rule (pluginId) counts.
-- Write results in multiple formats (JSON, HTML, XML, Markdown, Excel, text
- log), plus an optional minimal SARIF report for GitHub Security dashboards.
-- Support quality-of-life flags such as:
- - `--ignore-alerts` to drop expected/noisy alerts via regex.
- - `--baseline-json` to compare current vs previous severity counts.
- - `--summary-only` for fast console-only runs without writing artefacts.
- - `--fail-on-high` / `--fail-on-medium` for CI gating by risk level.
+Main features:
+- Start a ZAP daemon in Docker automatically or connect to an existing one.
+- Run a quick HEAD check to see if the target is reachable before scanning.
+- Create a ZAP context with include/exclude rules and optional form login.
+- Run a spider followed by an active scan, polling for progress.
+- Collect alerts and build a severity summary, an approximate OWASP Top 10
+  view and a simple impact score.
+- Write results in JSON, HTML, XML, Markdown, Excel and text log formats,
+  plus an optional SARIF file for CI systems.
+- Support handy flags such as --ignore-alerts, --baseline-json, --summary-only
+  and severity-based exit codes for CI usage.
 """
 
 import argparse
@@ -44,10 +35,10 @@ LOGS_ROOT = SCRIPT_ROOT / "logs"
 # Approximate mapping from common ZAP alert names to OWASP Top 10 2021
 # categories. This is intentionally simplified and designed for reporting /
 OWASP_ZAP_MAP: Dict[str, List[str]] = {
-  # Cross-Site Scripting variants.
+  # Cross-site scripting and related injection issues.
   "cross site scripting": ["A03:2021-Injection (XSS)"],
   "xss": ["A03:2021-Injection (XSS)"],
-  # SQL injection and injection-style findings.
+  # SQL / command injection style findings.
   "sql injection": ["A03:2021-Injection"],
   "command injection": ["A03:2021-Injection"],
   # Missing or misconfigured security headers / debug settings.
@@ -83,16 +74,6 @@ def is_zap_reachable(api_key: str, host: str, port: int) -> bool:
 
   try:
     zap = _zap_client(api_key, host, port)
-    # Different versions of the python ZAP client expose ``core.version`` as
-    # either a *callable* (method) or a simple property that already
-    # contains a string. In some environments calling it unconditionally
-    # (``zap.core.version()``) results in ``TypeError: 'str' object is not
-    # callable`` even though the API is actually reachable.
-    #
-    # To keep this helper robust we support both styles:
-    #
-    # - If ``zap.core.version`` is callable, invoke it.
-    # - Otherwise treat the attribute value as the version string.
     version_attr = zap.core.version # type: ignore[assignment]
     version = version_attr() if callable(version_attr) else version_attr
     # Any non-empty response here is enough to treat ZAP as "reachable".
@@ -494,13 +475,13 @@ def run_manual_dast(
   max_pages: int = 50,
 ) -> Dict[str, Any]:
   """
-  Minimal "manual" DAST fallback when ZAP is not available.
+  Minimal HTTP-based DAST fallback when ZAP is not available.
 
-  This does a lightweight crawl of the target using the requests library and
-  flags a handful of common issues:
-   - Missing security headers (X-Frame-Options, X-Content-Type-Options, CSP)
-   - Weak cookies (missing HttpOnly/Secure/SameSite on HTTPS)
-   - 5xx responses and obvious error signatures in responses
+  The crawler uses `requests` only and focuses on a small set of easy-to
+  explain checks:
+   - Missing security headers (X-Frame-Options, X-Content-Type-Options, CSP).
+   - Weak cookies when HTTPS is in use (missing HttpOnly / Secure flags).
+   - 5xx responses and obvious error signatures in bodies.
   """
 
   print("[*] ZAP is not reachable; running manual HTTP DAST instead...")
@@ -701,7 +682,7 @@ def run_manual_dast(
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(
-    description="Run an OWASP ZAP DAST scan against the CA2 Django app or another target."
+    description="Run an OWASP ZAP DAST scan against a web application or another target."
   )
   parser.add_argument(
     "-t",
@@ -891,7 +872,7 @@ def parse_args() -> argparse.Namespace:
     action="store_true",
     help=(
       "Run a full automatic scan with sensible defaults suitable for "
-      "CA2 demonstrations (reports under logs/zap_reports, "
+      "demonstrations (reports under logs/zap_reports, "
       "HTML/JSON/MD outputs, and standard excludes for static/admin paths)."
     ),
   )
@@ -1034,31 +1015,11 @@ def main() -> None:
       except Exception as exc:  # pragma: no cover - defensive
         print(f"[!] Failed to mirror ZAP artefacts into logs/ hierarchy: {exc}")
 
-    severities = result.get("severity_summary", {})
-    owasp_summary = result.get("owasp_summary", {}) or {}
+    severities = result.get("severity_summary", {}) or {}
     high = int(severities.get("High", 0) or 0)
     medium = int(severities.get("Medium", 0) or 0)
 
-    print("\n[+] ZAP Severity Summary")
-    for sev in ("High", "Medium", "Low", "Informational"):
-      print(f"  {sev}: {int(severities.get(sev, 0) or 0)}")
-
-    if owasp_summary:
-      print("  OWASP Top 10 signals (approximate):")
-      for cat, count in sorted(
-        owasp_summary.items(), key=lambda kv: (-int(kv[1] or 0), kv[0])
-      ):
-        print(f"   - {cat}: {int(count or 0)}")
-
-    # Show a few example alerts to give context.
-    alerts = result.get("alerts", [])[:5]
-    if alerts:
-      print("  Sample alerts:")
-      for alert in alerts:
-        print(
-          f"   - [{alert.get('risk')}] {alert.get('alert')} "
-          f"on {alert.get('url')}"
-        )
+    _print_severity_summary(result)
 
     # Optional trend comparison against a previous JSON report.
     if args.baseline_json:
@@ -1173,6 +1134,39 @@ def _write_sarif(result: Dict[str, Any], sarif_path: Path) -> None:
   sarif_path.parent.mkdir(parents=True, exist_ok=True)
   sarif_path.write_text(json.dumps(sarif, indent=2))
   print(f"[+] SARIF report written to {sarif_path}")
+
+
+def _print_severity_summary(
+  result: Dict[str, Any],
+) -> None:
+  """
+  Print a compact severity and OWASP-style summary for a ZAP or manual scan.
+
+  Keeping this in a helper keeps `main` shorter and makes the summary easy
+  to reuse from tests or other scripts.
+  """
+  severities = result.get("severity_summary", {}) or {}
+  owasp_summary = result.get("owasp_summary", {}) or {}
+
+  print("\n[+] ZAP Severity Summary")
+  for sev in ("High", "Medium", "Low", "Informational"):
+    print(f"  {sev}: {int(severities.get(sev, 0) or 0)}")
+
+  if owasp_summary:
+    print("  OWASP Top 10 signals (approximate):")
+    for cat, count in sorted(
+      owasp_summary.items(), key=lambda kv: (-int(kv[1] or 0), kv[0])
+    ):
+      print(f"   - {cat}: {int(count or 0)}")
+
+  alerts = result.get("alerts", [])[:5]
+  if alerts:
+    print("  Sample alerts:")
+    for alert in alerts:
+      print(
+        f"   - [{alert.get('risk')}] {alert.get('alert')} "
+        f"on {alert.get('url')}"
+      )
 
 
 if __name__ == "__main__":

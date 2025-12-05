@@ -1,27 +1,19 @@
 """
-Advanced Bandit SAST wrapper for the CA2 secure scripting project.
+Lightweight wrapper around Bandit for scanning Python projects.
 
-This script runs Bandit against the Django codebase (or any Python target) and:
-
-- Writes a full JSON report that can be stored as evidence for CA2.
+The script:
+- Runs Bandit recursively against a given path and captures the JSON output.
 - Optionally writes a text summary log and an Excel workbook of findings
- (one row per issue) under a structured `logs/` hierarchy with automatic,
- non-overwriting filenames.
-- Prints a concise human-readable summary to STDOUT, including total issues,
- HIGH/MEDIUM/LOW counts and lines of code analysed.
-- Supports a logical "mode" switch used in this project:
- - In **insecure** mode we show all Bandit findings as-is.
- - In **secure** mode we filter out intentionally vulnerable teaching code so
-  that the summary illustrates a "clean" run for comparison in reports.
-- Adds an approximate OWASP Top 10 classification based on Bandit test IDs so
- you can talk about categories (e.g. Injection, Cryptographic Failures,
- Security Misconfiguration) rather than raw Bandit IDs only.
-- Provides a `--summary-only` mode for quick local checks that prints only the
- console summary (including OWASP mapping) without writing any artefacts.
-- Supports CI-friendly exit codes via `--fail-on-high` and `--fail-on-medium`
- so the pipeline can fail on serious SAST findings while still generating
- evidence reports.
-
+  under a simple logs/ hierarchy with non-overwriting filenames.
+- Prints a short console summary with total issues, severity counts and
+  lines of code analysed.
+- Supports a logical reporting mode:
+  - "insecure" shows all Bandit findings.
+  - "secure" hides known demo findings so that a "clean" run is easy to show.
+- Adds an approximate OWASP Top 10 view based on Bandit test IDs so you can
+  talk about high-level categories instead of only plugin IDs.
+- Provides a --summary-only mode for quick local checks and optional
+  --fail-on-high / --fail-on-medium flags for CI pipelines.
 """
 
 import argparse
@@ -36,11 +28,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 LOGS_ROOT = SCRIPT_ROOT / "logs"
 
 
-# Approximate mapping from Bandit test IDs or patterns to OWASP Top 10 2021
-# categories. This is intentionally simplified and geared towards teaching /
-# reporting rather than exact compliance. Bandit itself still runs its full
-# built-in test suite – this mapping is only used to GROUP findings in
-# summaries. For the complete list of Bandit plugins, see:
+# Approximate mapping from Bandit test IDs or patterns to OWASP Top 10 
 # https://bandit.readthedocs.io/en/latest/plugins/index.html
 OWASP_BANDIT_MAP: Dict[str, List[str]] = {
   # Hardcoded passwords / secrets / keys.
@@ -49,12 +37,12 @@ OWASP_BANDIT_MAP: Dict[str, List[str]] = {
   "B107": ["A02:2021-Cryptographic Failures"],
   "B108": ["A02:2021-Cryptographic Failures"],
   "B109": ["A02:2021-Cryptographic Failures"],
-  "B110": ["A02:2021-Cryptographic Failures"], # hardcoded temp dirs / similar
+  "B110": ["A02:2021-Cryptographic Failures"],  # hardcoded temp dirs / similar
 
-  # Use of eval/exec or dynamic code.
+  # Use of eval/exec or other dynamic code patterns.
   "B102": ["A03:2021-Injection"],
-  "B307": ["A03:2021-Injection"], # eval
-  "B308": ["A03:2021-Injection"], # mark_safe / template injection
+  "B307": ["A03:2021-Injection"],  # eval
+  "B308": ["A03:2021-Injection"],  # mark_safe / template injection
 
   # SQL / OS command injection, subprocess with shell=True, etc.
   "B602": ["A03:2021-Injection"],
@@ -67,7 +55,7 @@ OWASP_BANDIT_MAP: Dict[str, List[str]] = {
   "B609": ["A03:2021-Injection"],
 
   # Unsafe deserialisation, XML, and data integrity.
-  "B201": ["A08:2021-Software and Data Integrity Failures"], # pickle
+  "B201": ["A08:2021-Software and Data Integrity Failures"],  # pickle
   "B301": ["A08:2021-Software and Data Integrity Failures"],
   "B302": ["A08:2021-Software and Data Integrity Failures"],
   "B301-xml": ["A08:2021-Software and Data Integrity Failures"],
@@ -100,8 +88,8 @@ OWASP_BANDIT_MAP: Dict[str, List[str]] = {
   # General misconfiguration / debugging / assert / dangerous stdlib.
   "B101": ["A05:2021-Security Misconfiguration"],
   "B104": ["A05:2021-Security Misconfiguration"],
-  "B310": ["A05:2021-Security Misconfiguration"], # urllib/requests without TLS verify
-  "B312": ["A05:2021-Security Misconfiguration"], # telnetlib
+  "B310": ["A05:2021-Security Misconfiguration"],  # urllib/requests without TLS verify
+  "B312": ["A05:2021-Security Misconfiguration"],  # telnetlib
   "B313": ["A05:2021-Security Misconfiguration"],
   "B320": ["A05:2021-Security Misconfiguration"],
 }
@@ -290,8 +278,8 @@ def print_summary(report: Dict[str, Any]) -> None:
     loc = metrics.get("__totals__", {}).get("loc", 0)
     print(f"  Lines of code analysed: {loc}")
 
-  # Approximate OWASP Top 10 classification based on Bandit test IDs. This
-  # gives a higher-level view suitable for reports and CA2 commentary.
+# Approximate OWASP Top 10 classification based on Bandit test IDs. This
+# gives a higher-level view suitable for reports and commentary.
   category_counts: Dict[str, int] = {}
   # Reuse the same heuristic mapping logic as the text log writer so that
   # console and logs stay in sync.
@@ -372,7 +360,7 @@ print_summary = _HelperCallable(_print_summary_impl)
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(
-    description="Run Bandit SAST against the CA2 Django project."
+    description="Run Bandit SAST against a Python project."
   )
   parser.add_argument(
     "--path",

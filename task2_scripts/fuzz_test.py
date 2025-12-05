@@ -1,33 +1,22 @@
 """
-Advanced HTTP fuzzing engine for the CA2 secure scripting project.
+Simple HTTP fuzzing tool for web applications.
 
-This script is a focused but capable fuzzer It demonstrates a number of real-world fuzzing concepts:
-
-- Sending unexpected input (including punctuation and very long strings) to
- HTTP endpoints to see how they behave under stress.
-- Supporting multiple HTTP methods (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS).
-- Fuzzing both **query parameters** and **request bodies** (JSON or form),
- including optional multipart file uploads to exercise upload endpoints.
-- Using structured **payload categories** (SQLi, XSS, path traversal, Unicode,
- Django template injections) from a built-in library, with an optional
- mutation engine to distort payloads (invert case, insert special chars,
- delete/duplicate characters, reverse strings, etc.).
-- Recording every request/response pair in JSON for later analysis and writing
- per-run and aggregate text logs and Excel reports.
-- A "buffer_overflow" style mode that generates very large payloads to test
- how the application handles large request sizes and potential DoS conditions.
-- Optional **authenticated fuzzing** using a Django-style login flow with CSRF
- token handling and session cookie reuse.
-- Header and cookie fuzzing via external JSON files and `<fuzz>` placeholders.
-- **Replay** and **replay-mutate** modes to resend payloads from previous
- reports to confirm or explore interesting behaviour.
-- Threaded fuzzing (`--threads`) to run multiple endpoint/category jobs in
- parallel.
-- Built-in anomaly detection (5xx errors, error signatures, slow/large
- responses, reflection, redirect loops, rate-limiting) with approximate
- OWASP Top 10 mapping and simple input coverage summaries printed at the end
- of each run.
-
+It can:
+- Send unexpected or very long input to HTTP endpoints to see how they behave.
+- Use several HTTP methods (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS).
+- Fuzz query parameters and optional JSON/form request bodies, with optional
+  multipart file uploads.
+- Use built-in payload categories (for example SQLi, XSS, path traversal,
+  Unicode, template injection) plus a small mutation step.
+- Record each request/response pair to JSON, log files and an optional
+  Excel workbook.
+- Run a "buffer_overflow" style mode that sends very large payloads.
+- Optionally perform a Django-style login first and reuse the session.
+- Fuzz headers and cookies from small JSON templates that can include
+  a "<fuzz>" placeholder.
+- Replay (or replay with extra mutation) from a previous JSON report.
+- Run across multiple endpoints/categories in threads and print a short
+  anomaly summary at the end of each run.
 """
 
 import argparse
@@ -128,14 +117,13 @@ ERROR_PATTERNS: List[str] = [
   "500 Internal Server Error",
 ]
 
-# Simple mapping from anomaly reason labels to OWASP Top 10 style categories.
-# This is intentionally approximate and intended for teaching/reporting rather
-# than formal classification.
+# Mapping from simple anomaly reason labels to OWASP Top 10 style categories.
+# The aim is to keep reporting easy to explain in summaries, not to provide a
+# perfect or exhaustive classification.
 OWASP_REASON_MAP: Dict[str, List[str]] = {
-  # Reflection of potentially malicious input back to the client.
+  # Payload is reflected back in the response body (often XSS‑related).
   "reflected_payload": ["A03:2021-Injection (XSS)"],
-  # Unhandled exceptions / 5xx responses and stack traces. Often indicate
-  # both misconfiguration and weak error handling / monitoring.
+  # Unhandled exceptions, 5xx responses and stack traces.
   "5xx_error": [
     "A05:2021-Security Misconfiguration",
     "A09:2021-Security Logging and Monitoring Failures",
@@ -144,8 +132,8 @@ OWASP_REASON_MAP: Dict[str, List[str]] = {
     "A05:2021-Security Misconfiguration",
     "A09:2021-Security Logging and Monitoring Failures",
   ],
-  # Unexpected 4xx errors can indicate broken access control or validation
-  # gaps as well as misconfiguration.
+  # Unexpected 4xx errors can indicate broken access control, validation gaps
+  # or general misconfiguration.
   "client_error": [
     "A01:2021-Broken Access Control",
     "A05:2021-Security Misconfiguration",
@@ -155,8 +143,7 @@ OWASP_REASON_MAP: Dict[str, List[str]] = {
     "A05:2021-Security Misconfiguration",
     "A04:2021-Insecure Design",
   ],
-  # Very slow or very large responses can indicate insecure design or DoS
-  # risk; they may also hint at fragile components and integrity issues.
+  # Very slow or very large responses (potential DoS or fragile behaviour).
   "slow_response": [
     "A04:2021-Insecure Design",
     "A08:2021-Software and Data Integrity Failures",
@@ -165,24 +152,35 @@ OWASP_REASON_MAP: Dict[str, List[str]] = {
     "A04:2021-Insecure Design",
     "A08:2021-Software and Data Integrity Failures",
   ],
-  
+  # Rate limiting is not a weakness by itself, but is useful for context.
   "rate_limited": [],
+  # Possible personal data / PII leaked in responses.
   "pii_leak": ["A09:2021-Security Logging and Monitoring Failures"],
+  # Debug pages, stack traces, or verbose error output.
   "debug_info": ["A05:2021-Security Misconfiguration"],
+  # Obvious gaps in standard security headers.
   "missing_security_headers": ["A05:2021-Security Misconfiguration"],
+  # Weak or misconfigured TLS / HTTPS usage.
   "weak_tls": ["A02:2021-Cryptographic Failures"],
+  # Cookie flags or handling that looks risky.
   "cookie_issue": [
     "A02:2021-Cryptographic Failures",
     "A01:2021-Broken Access Control",
   ],
+  # Suspicious CSRF behaviour or missing protection.
   "csrf_missing": [
     "A01:2021-Broken Access Control",
     "A05:2021-Security Misconfiguration",
   ],
+  # Open redirect patterns (user‑controlled redirect targets).
   "open_redirect": ["A01:2021-Broken Access Control"],
+  # Simple indicators of insecure direct object references (IDOR).
   "idor_pattern": ["A01:2021-Broken Access Control"],
+  # Directory listing or index pages exposed.
   "dir_listing": ["A05:2021-Security Misconfiguration"],
+  # Overly detailed or noisy server banners.
   "verbose_server_header": ["A05:2021-Security Misconfiguration"],
+  # API responses that leak unnecessary internals or stack details.
   "api_error_detail": [
     "A05:2021-Security Misconfiguration",
     "A09:2021-Security Logging and Monitoring Failures",
@@ -350,9 +348,9 @@ def random_string(min_len: int = 1, max_len: int = 50) -> str:
 def build_bodies(payload: str, body_type: str) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
   """
   Build JSON or form bodies for fuzzing.
-
-  For now we use a simple banking-style schema that works well against the
-  CA2 project and many generic login/transfer endpoints:
+ 
+  For now we use a simple banking-style schema that works well against this
+  project and many common login/transfer endpoints:
 
   {
     "username": "<fuzz>",
@@ -563,6 +561,112 @@ def mutate_payload(payload: str, strategy: Optional[str] = None) -> str:
   return func(payload)
 
 
+def analyse_fuzz_samples(
+  samples: List[Dict[str, object]],
+  status_codes: List[int],
+  durations: List[float],
+  lengths: List[int],
+) -> None:
+  """
+  Add simple anomaly flags to collected samples and print a short summary.
+
+  Keeping this logic separate from `fuzz_endpoint` makes the core request
+  loop easier to follow and lets other tools or tests reuse the same
+  analysis without re-implementing it.
+  """
+  if not samples:
+    print("\n[+] No samples collected; skipping anomaly analysis.")
+    return
+
+  # Derive simple baselines for anomaly detection.
+  avg_duration = sum(durations) / len(durations) if durations else None
+  avg_length = sum(lengths) / len(lengths) if lengths else None
+
+  for sample in samples:
+    reasons: List[str] = []
+    status = sample.get("status_code")
+    duration = sample.get("duration")
+    length = sample.get("response_length")
+    redirects = sample.get("redirects", 0) or 0
+
+    if isinstance(duration, (int, float)) and avg_duration and duration > avg_duration * 3:
+      reasons.append("slow_response")
+    if isinstance(length, int) and avg_length and length > avg_length * 4:
+      reasons.append("large_body")
+    if sample.get("is_5xx"):
+      reasons.append("5xx_error")
+    if sample.get("has_error_signature"):
+      reasons.append("error_signature")
+    if sample.get("rate_limited"):
+      reasons.append("rate_limited")
+    if sample.get("reflected"):
+      reasons.append("reflected_payload")
+    if redirects > 10:
+      reasons.append("redirect_loop")
+
+    # Treat 4xx other than 404 as potential anomalies/crashes as well.
+    if isinstance(status, int) and status >= 400 and status not in (404, 429):
+      reasons.append("client_error")
+
+    if reasons:
+      sample["anomaly"] = True
+      sample["anomaly_reasons"] = reasons
+      # Attach approximate OWASP Top 10 style categories for reporting.
+      owasp_categories: List[str] = []
+      for reason in reasons:
+        for cat in OWASP_REASON_MAP.get(reason, []):
+          if cat not in owasp_categories:
+            owasp_categories.append(cat)
+      if owasp_categories:
+        sample["owasp_categories"] = sorted(owasp_categories)
+    else:
+      sample["anomaly"] = False
+
+  # Print a short anomaly-centric summary to help quickly spot interesting
+  # behaviour without having to open the JSON/Excel reports.
+  total_samples = len(samples)
+  anomalous_samples = [s for s in samples if s.get("anomaly")]
+  total_anomalous = len(anomalous_samples)
+  pct = (total_anomalous / total_samples) * 100 if total_samples else 0.0
+
+  print("\n[+] Anomaly summary")
+  print(f"  Total samples: {total_samples}")
+  print(f"  Anomalous samples: {total_anomalous} ({pct:.1f}%)")
+
+  # Count anomaly reasons across all anomalous samples.
+  reason_counts: Dict[str, int] = {}
+  category_counts: Dict[str, int] = {}
+  for s in anomalous_samples:
+    for reason in s.get("anomaly_reasons", []):
+      reason_counts[reason] = reason_counts.get(reason, 0) + 1
+      for cat in OWASP_REASON_MAP.get(reason, []):
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+  if reason_counts:
+    print("  Reasons:")
+    for reason, count in sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+      print(f"   - {reason}: {count}")
+  else:
+    print("  (no anomalies detected)")
+
+  if category_counts:
+    print("  OWASP Top 10 signals:")
+    for cat, count in sorted(
+      category_counts.items(), key=lambda kv: (-kv[1], kv[0])
+    ):
+      print(f"   - {cat}: {count}")
+
+  # Simple input/feature coverage-style summary.
+  with_files = sum(1 for s in samples if s.get("has_file"))
+  with_headers = sum(1 for s in samples if s.get("has_headers"))
+  with_cookies = sum(1 for s in samples if s.get("has_cookies"))
+
+  print("\n[+] Input coverage summary")
+  print(f"  Requests with file uploads: {with_files}/{total_samples}")
+  print(f"  Requests with custom headers: {with_headers}/{total_samples}")
+  print(f"  Requests with custom cookies: {with_cookies}/{total_samples}")
+
+
 def fuzz_endpoint(
   base_url: str,
   path: str,
@@ -770,97 +874,7 @@ def fuzz_endpoint(
   for code in sorted(set(status_codes)):
     print(f"  {code}: {status_codes.count(code)}")
 
-  # Derive simple baselines for anomaly detection.
-  avg_duration = sum(durations) / len(durations) if durations else None
-  avg_length = sum(lengths) / len(lengths) if lengths else None
-
-  for sample in samples:
-    reasons: List[str] = []
-    status = sample.get("status_code")
-    duration = sample.get("duration")
-    length = sample.get("response_length")
-    redirects = sample.get("redirects", 0) or 0
-
-    if isinstance(duration, (int, float)) and avg_duration and duration > avg_duration * 3:
-      reasons.append("slow_response")
-    if isinstance(length, int) and avg_length and length > avg_length * 4:
-      reasons.append("large_body")
-    if sample.get("is_5xx"):
-      reasons.append("5xx_error")
-    if sample.get("has_error_signature"):
-      reasons.append("error_signature")
-    if sample.get("rate_limited"):
-      reasons.append("rate_limited")
-    if sample.get("reflected"):
-      reasons.append("reflected_payload")
-    if redirects > 10:
-      reasons.append("redirect_loop")
-
-    # Treat 4xx other than 404 as potential anomalies/crashes as well.
-    if isinstance(status, int) and status >= 400 and status not in (404, 429):
-      reasons.append("client_error")
-
-    if reasons:
-      sample["anomaly"] = True
-      sample["anomaly_reasons"] = reasons
-      # Attach approximate OWASP Top 10 style categories for reporting.
-      owasp_categories: List[str] = []
-      for reason in reasons:
-        for cat in OWASP_REASON_MAP.get(reason, []):
-          if cat not in owasp_categories:
-            owasp_categories.append(cat)
-      if owasp_categories:
-        sample["owasp_categories"] = sorted(owasp_categories)
-    else:
-      sample["anomaly"] = False
-
-  # Print a short anomaly-centric summary to help quickly spot interesting
-  # behaviour without having to open the JSON/Excel reports.
-  total_samples = len(samples)
-  anomalous_samples = [s for s in samples if s.get("anomaly")]
-  total_anomalous = len(anomalous_samples)
-  if total_samples:
-    pct = (total_anomalous / total_samples) * 100
-  else:
-    pct = 0.0
-
-  print("\n[+] Anomaly summary")
-  print(f"  Total samples: {total_samples}")
-  print(f"  Anomalous samples: {total_anomalous} ({pct:.1f}%)")
-
-  # Count anomaly reasons across all anomalous samples.
-  reason_counts: Dict[str, int] = {}
-  category_counts: Dict[str, int] = {}
-  for s in anomalous_samples:
-    for reason in s.get("anomaly_reasons", []):
-      reason_counts[reason] = reason_counts.get(reason, 0) + 1
-      for cat in OWASP_REASON_MAP.get(reason, []):
-        category_counts[cat] = category_counts.get(cat, 0) + 1
-
-  if reason_counts:
-    print("  Reasons:")
-    for reason, count in sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0])):
-      print(f"   - {reason}: {count}")
-  else:
-    print("  (no anomalies detected)")
-
-  if category_counts:
-    print("  OWASP Top 10 signals:")
-    for cat, count in sorted(
-      category_counts.items(), key=lambda kv: (-kv[1], kv[0])
-    ):
-      print(f"   - {cat}: {count}")
-
-  # Simple input/feature coverage-style summary.
-  if samples:
-    with_files = sum(1 for s in samples if s.get("has_file"))
-    with_headers = sum(1 for s in samples if s.get("has_headers"))
-    with_cookies = sum(1 for s in samples if s.get("has_cookies"))
-
-    print("\n[+] Input coverage summary")
-    print(f"  Requests with file uploads: {with_files}/{total_samples}")
-    print(f"  Requests with custom headers: {with_headers}/{total_samples}")
-    print(f"  Requests with custom cookies: {with_cookies}/{total_samples}")
+  analyse_fuzz_samples(samples, status_codes, durations, lengths)
 
   # Determine output directory and filenames.
   parsed = urlparse(base_url)
@@ -969,7 +983,7 @@ def fuzz_endpoint(
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(
-    description="Simple HTTP fuzz tester for the CA2 Django application."
+    description="Simple HTTP fuzz tester for web applications."
   )
   parser.add_argument(
     "--base-url",
@@ -994,7 +1008,6 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--iterations",
     type=int,
-    #change this to whatever you want auto to run at 
     default=20,
     help="Number of fuzzing iterations per run (default: 20).",
   )
