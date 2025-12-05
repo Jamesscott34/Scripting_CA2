@@ -8,5 +8,6 @@ psycopg2-binary
 pytest
 flask
 werkzeug
+gunicorn
 
 # 
